@@ -1,0 +1,6 @@
+Flask>=2.0
+python-telegram-bot[webhooks]==22.2
+pandas>=1.0
+openpyxl
+aiohttp>=3.0
+aiofiles>=0.5

@@ -4,18 +4,17 @@ import aiohttp
 from io import BytesIO
 import pandas as pd
 import logging
+from datetime import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 async def normalize_sheet_url(url):
-    """Нормализует URL Google Sheets для экспорта в CSV."""
     if "docs.google.com" in url and not url.endswith("/export?format=csv"):
         return url + "/export?format=csv"
     return url
 
 async def load_zones_cached(context, url=os.getenv("ZONES_CSV_URL", ""), ttl=3600):
-    """Кэширует данные зон доступа с использованием aiohttp."""
     cache_key = "zones_data"
     if cache_key not in context.bot_data or context.bot_data[cache_key]["expires"] < time.time():
         try:
@@ -37,7 +36,7 @@ async def load_zones_cached(context, url=os.getenv("ZONES_CSV_URL", ""), ttl=360
                 "expires": time.time() + ttl
             }
         except aiohttp.ClientError as e:
-            logger.error(f"Ошибка загрузки зон доступа: {e}")
+            logger.error(f"Ошибка загрузки зон: {e}")
             raise
         except pd.errors.EmptyDataError:
             logger.error("CSV-файл зон пуст")

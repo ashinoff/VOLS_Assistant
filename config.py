@@ -1,22 +1,24 @@
-TOKEN = "8066747417:AAG3nzy1wuK4uogGYwUrWZtZyUxKdx-7ufQ"  # Замените на токен из @BotFather
-SELF_URL = "https://your-new-app.onrender.com"  # Замените на URL после деплоя
-PORT = 5000
+import os
+
+TOKEN = os.getenv("TOKEN", "8066747417:AAG3nzy1wuK4uogGYwUrWZtZyUxKdx-7ufQ")
+SELF_URL = os.getenv("SELF_URL", "https://vols-assistant.onrender.com")
+PORT = int(os.getenv("PORT", 5000))
 
 BRANCH_URLS = {
     "Россети ЮГ": {
-        "Тимашевские ЭС": "YOUR_GOOGLE_DRIVE_URL_UG",  # Замените на URL CSV
+        "Тимашевские ЭС": os.getenv("BRANCH_URLS_UG", ""),
     },
     "Россети Кубань": {
-        "Тимашевские ЭС": "YOUR_GOOGLE_DRIVE_URL_RK",  # Замените на URL CSV
+        "Тимашевские ЭС": os.getenv("BRANCH_URLS_RK", ""),
     },
 }
 
 NOTIFY_URLS = {
     "Россети ЮГ": {
-        "Тимашевские ЭС": "YOUR_NOTIFY_URL_UG",  # Замените на URL справочника
+        "Тимашевские ЭС": os.getenv("NOTIFY_URLS_UG", ""),
     },
     "Россети Кубань": {
-        "Тимашевские ЭС": "YOUR_NOTIFY_URL_RK",  # Замените на URL справочника
+        "Тимашевские ЭС": os.getenv("NOTIFY_URLS_RK", ""),
     },
 }
 

@@ -21,6 +21,9 @@ from openpyxl.styles import PatternFill
 from openpyxl.utils import get_column_letter
 import logging
 
+# Добавляем импорт Enum
+from enum import Enum
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -1,269 +1,144 @@
-import os
-import asyncio
+import csv
 import logging
-from enum import Enum
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
-    MessageHandler,
-    filters,
+    CallbackQueryHandler,
     ContextTypes,
 )
-import aiohttp
-import aiofiles
-import pandas as pd
-import csv
-import re
-from datetime import datetime, timezone
-from io import BytesIO
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+# Configure logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-from config import TOKEN, SELF_URL, PORT, BRANCH_URLS, NOTIFY_URLS, ZONES_CSV_URL, NOTIFY_LOG_FILE_UG, NOTIFY_LOG_FILE_RK
-from zones import normalize_sheet_url, load_zones_cached
+# Path to zones file
+ZONES_FILE = "zones_rk_ug.csv"
 
-# Перечисление для шагов
-class BotStep(Enum):
-    INIT = "INIT"
-    NET = "NET"
-    BRANCH = "BRANCH"
-    AWAIT_TP_INPUT = "AWAIT_TP_INPUT"
-    NOTIFY_AWAIT_TP = "NOTIFY_AWAIT_TP"
-    NOTIFY_VL = "NOTIFY_VL"
-    NOTIFY_GEO = "NOTIFY_GEO"
-
-# Клавиатуры
-kb_back = ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
-kb_actions = ReplyKeyboardMarkup([["🔍 Поиск по ТП"], ["🔔 Отправить уведомление"], ["🔙 Назад"]], resize_keyboard=True)
-kb_request_location = ReplyKeyboardMarkup([[KeyboardButton("📍 Отправить геолокацию", request_location=True)], ["🔙 Назад"]], resize_keyboard=True)
-
-def build_initial_kb(vis_flag: str, res_flag: str) -> ReplyKeyboardMarkup:
-    f = vis_flag.strip().upper()
-    nets = ["⚡ Россети ЮГ", "⚡ Россети Кубань"] if f == "ALL" else ["⚡ Россети ЮГ"] if f == "UG" else ["⚡ Россети Кубань"]
-    buttons = [[n] for n in nets]
-    buttons.append(["📖 Помощь"])
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-
-async def get_cached_csv(context, url, cache_key, ttl=3600):
-    if cache_key not in context.bot_data or context.bot_data[cache_key]["expires"] < time.time():
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(await normalize_sheet_url(url), timeout=10) as response:
-                    response.raise_for_status()
-                    df = pd.read_csv(BytesIO(await response.read()))
-            context.bot_data[cache_key] = {"data": df, "expires": time.time() + ttl}
-        except aiohttp.ClientError as e:
-            logger.error(f"Ошибка загрузки CSV: {e}")
-            raise
-        except pd.errors.EmptyDataError:
-            logger.error(f"CSV-файл пуст: {url}")
-            raise
-    return context.bot_data[cache_key]["data"]
-
-async def log_notification(log_file, data):
+# Load user data from CSV
+def load_user_data():
+    users = {}
     try:
-        async with aiofiles.open(log_file, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
-            await f.write(writer.writerow(data))
-    except Exception as e:
-        logger.error(f"Ошибка записи в лог {log_file}: {e}")
+        with open(ZONES_FILE, newline="", encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                users[row["Telegram ID"]] = {
+                    "Visibility": row["Visibility"],
+                    "Branch": row["Филиал"],
+                    "RES": row["РЭС"],
+                    "FIO": row["ФИО"],
+                    "Responsible": row["Ответственный"],
+                }
+    except FileNotFoundError:
+        logger.error(f"Zones file {ZONES_FILE} not found.")
+    return users
 
-# === /start ===
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    try:
-        vis_map, raw_branch_map, res_map, names, resp_map = await load_zones_cached(context)
-    except Exception as e:
-        logger.error(f"Ошибка загрузки зон для {uid}: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка: {e}", reply_markup=kb_back)
-        return
-    if uid not in raw_branch_map:
-        await update.message.reply_text("🚫 Нет доступа.", reply_markup=kb_back)
-        return
-
-    raw = raw_branch_map[uid]
-    branch_key = "All" if raw == "All" else raw
-    context.user_data.clear()
-    context.user_data.update({
-        "step": BotStep.BRANCH.value if branch_key != "All" else BotStep.INIT.value,
-        "vis_flag": vis_map[uid],
-        "branch_user": branch_key,
-        "res_user": res_map[uid],
-        "name": names[uid],
-        "resp_map": resp_map
-    })
-
-    if branch_key != "All":
-        await update.message.reply_text("Выберите действие:", reply_markup=kb_actions)
-    else:
-        await update.message.reply_text(f"👋 {names[uid]}, выберите сеть:", reply_markup=build_initial_kb(vis_map[uid], res_map[uid]))
-
-# === /help ===
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📖 Инструкции:\n1. /start — начать.\n2. Выберите сеть и действие.\n3. Поиск: введите ТП (ТП-123).\n4. Уведомление: выберите ТП, ВЛ, отправьте геолокацию.",
-        reply_markup=kb_back
+# Check user visibility for a specific menu item
+def has_access(user_data, required_visibility):
+    if not user_data:
+        return False
+    user_visibility = user_data.get("Visibility", "").lower()
+    return (
+        user_visibility == "all"
+        or required_visibility.lower() == "all"
+        or user_visibility == required_visibility.lower()
     )
 
-# === Обработчики шагов ===
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if "step" not in context.user_data:
-        await start_cmd(update, context)
+# Define menu buttons with visibility requirements
+MENU_BUTTONS = [
+    {
+        "text": "Россети Кубань ⚡️",
+        "callback_data": "rosseti_kuban",
+        "visibility": "all",
+    },
+    {
+        "text": "Россети ЮГ 🔌",
+        "callback_data": "rosseti_yug",
+        "visibility": "all",
+    },
+    {
+        "text": "Выгрузить отчеты 📊",
+        "callback_data": "download_reports",
+        "visibility": "all",
+    },
+    {
+        "text": "Телефонный справочник 📞",
+        "callback_data": "phone_directory",
+        "visibility": "all",
+    },
+    {
+        "text": "Справка ❓",
+        "callback_data": "help",
+        "visibility": "all",
+    },
+    {
+        "text": "Руководство пользователя 📖",
+        "callback_data": "user_guide",
+        "visibility": "all",
+    },
+]
+
+# Build keyboard based on user visibility
+def build_menu(user_data):
+    keyboard = []
+    for button in MENU_BUTTONS:
+        if has_access(user_data, button["visibility"]):
+            keyboard.append(
+                [InlineKeyboardButton(button["text"], callback_data=button["callback_data"])]
+            )
+    return InlineKeyboardMarkup(keyboard)
+
+# Start command handler
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    users = load_user_data()
+    user_data = users.get(user_id)
+
+    if not user_data:
+        await update.message.reply_text("Извините, вы не зарегистрированы в системе.")
         return
-    try:
-        vis_map, raw_branch_map, res_map, names, resp_map = await load_zones_cached(context)
-    except Exception as e:
-        logger.error(f"Ошибка загрузки зон: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка: {e}", reply_markup=kb_back)
-        return
-    step = context.user_data["step"]
-    vis_flag = context.user_data["vis_flag"]
-    name = context.user_data["name"]
 
-    if step == BotStep.INIT.value:
-        if text == "🔙 Назад":
-            await start_cmd(update, context)
-            return
-        if text in ["⚡ Россети ЮГ", "⚡ Россети Кубань"]:
-            context.user_data["step"] = BotStep.NET.value
-            context.user_data["net"] = text.replace("⚡ ", "")
-            branches = list(BRANCH_URLS[context.user_data["net"]].keys())
-            kb = ReplyKeyboardMarkup([[b] for b in branches] + [["🔙 Назад"]], resize_keyboard=True)
-            await update.message.reply_text("Выберите филиал:", reply_markup=kb)
-            return
-        await update.message.reply_text(f"{name}, доступны: {vis_flag}", reply_markup=build_initial_kb(vis_flag, ""))
+    fio = user_data["FIO"]
+    keyboard = build_menu(user_data)
+    await update.message.reply_text(
+        f"Здравствуйте, {fio}! Выберите действие:", reply_markup=keyboard
+    )
 
-    elif step == BotStep.NET.value:
-        if text == "🔙 Назад":
-            await start_cmd(update, context)
-            return
-        if text in BRANCH_URLS[context.user_data["net"]]:
-            context.user_data["step"] = BotStep.BRANCH.value
-            context.user_data["branch"] = text
-            await update.message.reply_text("Действие:", reply_markup=kb_actions)
-            return
-        await update.message.reply_text("⚠ Филиал не найден.", reply_markup=kb_back)
+# Button callback handler (placeholder for future functionality)
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    elif step == BotStep.BRANCH.value:
-        if text == "🔍 Поиск по ТП":
-            context.user_data["step"] = BotStep.AWAIT_TP_INPUT.value
-            await update.message.reply_text("Введите ТП (например, ТП-123):", reply_markup=kb_back)
-        elif text == "🔔 Отправить уведомление":
-            context.user_data["step"] = BotStep.NOTIFY_AWAIT_TP.value
-            await update.message.reply_text("Введите ТП для уведомления:", reply_markup=kb_back)
-        else:
-            await update.message.reply_text("Выберите действие:", reply_markup=kb_actions)
+    # Placeholder responses for each button
+    callback_data = query.data
+    responses = {
+        "rosseti_kuban": "Добро пожаловать в раздел Россети Кубань ⚡️. Функциональность в разработке.",
+        "rosseti_yug": "Добро пожаловать в раздел Россети ЮГ ⚡️. Функциональность в разработке.",
+        "download_reports": "Выгрузка отчетов 📊. Функционал в разработке.",
+        "phone_directory": "Телефонный справочник 📞. Функционал в разработке.",
+        "help": "Справка ❓. Функционал в разработке.",
+        "user_guide": "Руководство пользователя 📖. Функционал в разработке.",
+    }
 
-    elif step == BotStep.AWAIT_TP_INPUT.value:
-        if text == "🔙 Назад":
-            context.user_data["step"] = BotStep.BRANCH.value
-            await update.message.reply_text("Действие:", reply_markup=kb_actions)
-            return
-        net = context.user_data["net"]
-        branch = context.user_data["branch"]
-        url = BRANCH_URLS[net][branch]
-        if not url:
-            await update.message.reply_text(f"⚠ URL для {branch} не настроен.", reply_markup=kb_back)
-            return
-        try:
-            df = await get_cached_csv(context, url, f"{net}_{branch}")
-            if not all(col in df.columns for col in ["Наименование ТП", "РЭС", "Наименование ВЛ"]):
-                await update.message.reply_text("⚠ CSV без нужных столбцов.", reply_markup=kb_back)
-                return
-        except Exception as e:
-            logger.error(f"Ошибка данных для {net}/{branch}: {e}")
-            await update.message.reply_text(f"⚠ Ошибка: {e}", reply_markup=kb_back)
-            return
-        q = re.sub(r"\W", "", text.upper())
-        found = df[df["Наименование ТП"].str.upper().str.replace(r"\W", "", regex=True).str.contains(q)]
-        if found.empty:
-            await update.message.reply_text("ТП не найдено.", reply_markup=kb_back)
-            return
-        await update.message.reply_text(f"Найдено: {found['Наименование ТП'].iloc[0]}", reply_markup=kb_actions)
-        context.user_data["step"] = BotStep.BRANCH.value
+    await query.message.reply_text(responses.get(callback_data, "Неизвестная команда."))
 
-    elif step == BotStep.NOTIFY_AWAIT_TP.value:
-        if text == "🔙 Назад":
-            context.user_data["step"] = BotStep.BRANCH.value
-            await update.message.reply_text("Действие:", reply_markup=kb_actions)
-            return
-        net = context.user_data["net"]
-        branch = context.user_data["branch"]
-        url = NOTIFY_URLS[net][branch]
-        if not url:
-            await update.message.reply_text(f"⚠ URL уведомлений для {branch} не настроен.", reply_markup=kb_back)
-            return
-        try:
-            df = await get_cached_csv(context, url, f"notify_{net}_{branch}")
-            if not all(col in df.columns for col in ["Наименование ТП", "РЭС", "Наименование ВЛ"]):
-                await update.message.reply_text("⚠ CSV уведомлений без столбцов.", reply_markup=kb_back)
-                return
-        except Exception as e:
-            logger.error(f"Ошибка уведомлений для {net}/{branch}: {e}")
-            await update.message.reply_text(f"⚠ Ошибка: {e}", reply_markup=kb_back)
-            return
-        q = re.sub(r"\W", "", text.upper())
-        found = df[df["Наименование ТП"].str.upper().str.replace(r"\W", "", regex=True).str.contains(q)]
-        if found.empty:
-            await update.message.reply_text("ТП не найдено.", reply_markup=kb_back)
-            return
-        context.user_data["tp"] = found["Наименование ТП"].iloc[0]
-        context.user_data["step"] = BotStep.NOTIFY_VL.value
-        await update.message.reply_text("Выберите ВЛ:", reply_markup=ReplyKeyboardMarkup([[vl] for vl in found["Наименование ВЛ"].unique()] + [["🔙 Назад"]], resize_keyboard=True))
+# Error handler
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Update {update} caused error {context.error}")
 
-    elif step == BotStep.NOTIFY_VL.value:
-        if text == "🔙 Назад":
-            context.user_data["step"] = BotStep.NOTIFY_AWAIT_TP.value
-            await update.message.reply_text("Введите ТП для уведомления:", reply_markup=kb_back)
-            return
-        context.user_data["vl"] = text
-        context.user_data["step"] = BotStep.NOTIFY_GEO.value
-        await update.message.reply_text("Отправьте геолокацию:", reply_markup=kb_request_location)
+def main():
+    # Replace 'YOUR_TOKEN' with your bot token
+    application = Application.builder().token("YOUR_TOKEN").build()
 
-# === Обработчик геолокации ===
-async def location_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("step") != BotStep.NOTIFY_GEO.value:
-        return
-    loc = update.message.location
-    tp = context.user_data["tp"]
-    vl = context.user_data["vl"]
-    net = context.user_data["net"]
-    branch = context.user_data["branch"]
-    try:
-        vis_map, raw_branch_map, res_map, names, resp_map = await load_zones_cached(context)
-        res_tp = next((r for r in res_map.values() if r), "")
-        sender = context.user_data["name"]
-        recipients = [uid for uid, r in resp_map.items() if r and r.strip().lower() == res_tp.strip().lower()]
-        msg = f"🔔 Уведомление от {sender}, {res_tp} РЭС, {tp}, {vl} – Бездоговорной ВОЛС"
-        log_f = NOTIFY_LOG_FILE_UG if net == "Россети ЮГ" else NOTIFY_LOG_FILE_RK
-        for cid in recipients:
-            await context.bot.send_message(cid, msg)
-            await context.bot.send_location(cid, loc.latitude, loc.longitude)
-            await context.bot.send_message(cid, f"📍 {loc.latitude:.6f}, {loc.longitude:.6f}")
-            await log_notification(log_f, [branch, res_tp, update.effective_user.id, sender, cid, resp_map.get(cid, ""), datetime.now(timezone.utc).isoformat(), f"{loc.latitude:.6f},{loc.longitude:.6f}"])
-        await update.message.reply_text(f"✅ Уведомление отправлено: {', '.join(recipients)}", reply_markup=kb_actions)
-    except Exception as e:
-        logger.error(f"Ошибка геолокации: {e}")
-        await update.message.reply_text(f"⚠️ Ошибка: {e}", reply_markup=kb_actions)
-    context.user_data["step"] = BotStep.BRANCH.value
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_error_handler(error_handler)
 
-# Инициализация приложения
-application = ApplicationBuilder().token(TOKEN).build()
-application.add_handler(CommandHandler("start", start_cmd))
-application.add_handler(CommandHandler("help", help_cmd))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-application.add_handler(MessageHandler(filters.LOCATION, location_handler))
+    # Start the bot
+    application.run_polling()
 
 if __name__ == "__main__":
-    try:
-        if SELF_URL:
-            application.run_webhook(listen="0.0.0.0", port=PORT, url_path="webhook", webhook_url=f"{SELF_URL}/webhook")
-        else:
-            logger.warning("SELF_URL пуст, использую polling")
-            application.run_polling()
-    except Exception as e:
-        logger.error(f"Ошибка запуска: {e}")
+    main()

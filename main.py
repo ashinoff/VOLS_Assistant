@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # Initialize Telegram application
-application = None
+application = Application.builder().token(TOKEN).build()
 
 # Load user data from CSV on Google Drive
 def load_user_data():
@@ -137,10 +137,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Webhook endpoint
 @app.post("/webhook")
 async def webhook(request: Request):
-    if application is None:
-        raise HTTPException(status_code=503, detail="Bot not initialized")
     update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
+    if update:
+        await application.process_update(update)
     return {"status": "ok"}
 
 # Root endpoint for health check
@@ -148,20 +147,24 @@ async def webhook(request: Request):
 async def root():
     return {"message": "Bot is running"}
 
-def main():
-    global application
-    # Initialize bot
-    application = Application.builder().token(TOKEN).build()
+# FastAPI startup event to set webhook
+@app.on_event("startup")
+async def on_startup():
+    webhook_url = f"{SELF_URL}/webhook"
+    await application.bot.set_webhook(url=webhook_url)
+    logger.info(f"Webhook set to {webhook_url}")
+    await application.initialize()
 
+# FastAPI shutdown event
+@app.on_event("shutdown")
+async def on_shutdown():
+    await application.stop()
+
+def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_error_handler(error_handler)
-
-    # Set webhook
-    webhook_url = f"{SELF_URL}/webhook"
-    asyncio.run(application.bot.set_webhook(url=webhook_url))
-    logger.info(f"Webhook set to {webhook_url}")
 
     # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)

@@ -101,7 +101,7 @@ ES_URL_MAPPING = {
     "Сочинские ЭС": SOCHI_URL_RK,
     "Славянские ЭС": SLAVYANSK_URL_RK,
     "Ленинградские ЭС": LENINGRADSK_URL_RK,
-    "Лабинские ЭС": LAB fresINSK_URL_RK,
+    "Лабинские ЭС": LABINSK_URL_RK,
     "Краснодарские ЭС": KRASNODAR_URL_RK,
     "Армавирские ЭС": ARMAVIR_URL_RK,
     "Адыгейские ЭС": ADYGEYSK_URL_RK,

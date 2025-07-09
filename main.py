@@ -142,6 +142,11 @@ async def webhook(request: Request):
     await application.process_update(update)
     return {"status": "ok"}
 
+# Root endpoint for health check
+@app.get("/")
+async def root():
+    return {"message": "Bot is running"}
+
 async def setup_webhook():
     webhook_url = f"{SELF_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
@@ -158,7 +163,7 @@ def main():
     application.add_error_handler(error_handler)
 
     # Set webhook
-    application.run_async(setup_webhook())
+    application.run_coroutine(setup_webhook())
 
     # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)

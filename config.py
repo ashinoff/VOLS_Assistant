@@ -1,19 +1,11 @@
 import os
+from dotenv import load_dotenv
 
-TOKEN = os.getenv("TOKEN", "8066747417:AAG3nzy1wuK4uogGYwUrWZtZyUxKdx-7ufQ")
-SELF_URL = os.getenv("SELF_URL", "https://vols-assistant.onrender.com")
-PORT = int(os.getenv("PORT", 5000))
+load_dotenv()
 
-BRANCH_URLS = {
-    "Россети ЮГ": {"Тимашевские ЭС": os.getenv("TIMASHEV_ES_URL_UG", "")},
-    "Россети Кубань": {"Тимашевские ЭС": os.getenv("TIMASHEV_ES_URL_RK", "")},
-}
+# Bot configuration
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_TOKEN")
 
-NOTIFY_URLS = {
-    "Россети ЮГ": {"Тимашевские ЭС": os.getenv("TIMASHEV_ES_URL_UG_SP", "")},
-    "Россети Кубань": {"Тимашевские ЭС": os.getenv("TIMASHEV_ES_URL_RK_SP", "")},
-}
-
-ZONES_CSV_URL = os.getenv("ZONES_CSV_URL", "")
-NOTIFY_LOG_FILE_UG = "/app/notify_log_ug.csv"
-NOTIFY_LOG_FILE_RK = "/app/notify_log_rk.csv"
+# Google Drive configuration
+GOOGLE_DRIVE_FILE_ID = os.getenv("GOOGLE_DRIVE_FILE_ID", "YOUR_GOOGLE_DRIVE_FILE_ID")
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]

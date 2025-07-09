@@ -13,6 +13,7 @@ from email.mime.text import MIMEText
 from email import encoders
 import os
 from fastapi import FastAPI, Request, HTTPException
+from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -918,19 +919,23 @@ async def webhook(request: Request):
 async def root():
     return {"message": "Bot is running"}
 
-# FastAPI startup event to set webhook
-@app.on_event("startup")
-async def on_startup():
+# Lifespan event handler for startup and shutdown
+@asynccontextmanager
+async def lifespan(app):
+    # Startup
     init_db()  # Initialize SQLite database
     webhook_url = f"{SELF_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
     await application.initialize()
+    try:
+        yield
+    finally:
+        # Shutdown
+        await application.stop()
 
-# FastAPI shutdown event
-@app.on_event("shutdown")
-async def on_shutdown():
-    await application.stop()
+# Attach lifespan to FastAPI app
+app.lifespan = lifespan
 
 def main():
     # Conversation handler for TP search, notifications, and reports

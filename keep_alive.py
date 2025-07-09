@@ -2,7 +2,7 @@ import threading
 import time
 import requests
 import logging
-from config import PING_URL
+from config import SELF_URL
 
 # Configure logging
 logging.basicConfig(
@@ -14,13 +14,13 @@ def keep_alive():
     def ping():
         while True:
             try:
-                response = requests.get(PING_URL)
-                logger.info(f"Pinged {PING_URL}: {response.status_code}")
+                response = requests.get(SELF_URL)
+                logger.info(f"Pinged {SELF_URL}: {response.status_code}")
             except Exception as e:
                 logger.error(f"Ping failed: {e}")
             time.sleep(600)  # Ping every 10 minutes
 
-    if PING_URL:
+    if SELF_URL:
         thread = threading.Thread(target=ping, daemon=True)
         thread.start()
         logger.info("Keep-alive thread started")

@@ -20,7 +20,12 @@ from config import (
     YUZH_URL_UG, SEVERO_VOSTOCH_URL_UG, YUGO_VOSTOCH_URL_UG, SEVER_URL_UG,
     YUGO_ZAPAD_URL_RK, UST_LABINSK_URL_RK, TIMASHEVSK_URL_RK, TIKHORETSK_URL_RK,
     SOCHI_URL_RK, SLAVYANSK_URL_RK, LENINGRADSK_URL_RK, LABINSK_URL_RK,
-    KRASNODAR_URL_RK, ARMAVIR_URL_RK, ADYGEYSK_URL_RK
+    KRASNODAR_URL_RK, ARMAVIR_URL_RK, ADYGEYSK_URL_RK,
+    YUGO_ZAPAD_URL_UG_SP, CENTRAL_URL_UG_SP, ZAPAD_URL_UG_SP, VOSTOCH_URL_UG_SP,
+    YUZH_URL_UG_SP, SEVERO_VOSTOCH_URL_UG_SP, YUGO_VOSTOCH_URL_UG_SP, SEVER_URL_UG_SP,
+    YUGO_ZAPAD_URL_RK_SP, UST_LABINSK_URL_RK_SP, TIMASHEVSK_URL_RK_SP, TIKHORETSK_URL_RK_SP,
+    SOCHI_URL_RK_SP, SLAVYANSK_URL_RK_SP, LENINGRADSK_URL_RK_SP, LABINSK_URL_RK_SP,
+    KRASNODAR_URL_RK_SP, ARMAVIR_URL_RK_SP, ADYGEYSK_URL_RK_SP
 )
 
 # Configure logging
@@ -36,9 +41,9 @@ app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
 # States for ConversationHandler
-SEARCH_TP, SELECT_TP = range(2)
+SEARCH_TP, SELECT_TP, NOTIFY_TP, NOTIFY_VL, NOTIFY_GEO = range(5)
 
-# Mapping of ES names to their URLs
+# Mapping of ES names to their URLs for TP search
 ES_URL_MAPPING = {
     "Юго-Западные ЭС_UG": YUGO_ZAPAD_URL_UG,
     "Центральные ЭС": CENTRAL_URL_UG,
@@ -59,6 +64,29 @@ ES_URL_MAPPING = {
     "Краснодарские ЭС": KRASNODAR_URL_RK,
     "Армавирские ЭС": ARMAVIR_URL_RK,
     "Адыгейские ЭС": ADYGEYSK_URL_RK,
+}
+
+# Mapping of ES names to their URLs for notification directory
+ES_SP_URL_MAPPING = {
+    "Юго-Западные ЭС_UG": YUGO_ZAPAD_URL_UG_SP,
+    "Центральные ЭС": CENTRAL_URL_UG_SP,
+    "Западные ЭС": ZAPAD_URL_UG_SP,
+    "Восточные ЭС": VOSTOCH_URL_UG_SP,
+    "Южные ЭС": YUZH_URL_UG_SP,
+    "Северо-Восточные ЭС": SEVERO_VOSTOCH_URL_UG_SP,
+    "Юго-Восточные ЭС": YUGO_VOSTOCH_URL_UG_SP,
+    "Северные ЭС": SEVER_URL_UG_SP,
+    "Юго-Западные ЭС_RK": YUGO_ZAPAD_URL_RK_SP,
+    "Усть-Лабинские ЭС": UST_LABINSK_URL_RK_SP,
+    "Тимашевские ЭС": TIMASHEVSK_URL_RK_SP,
+    "Тихорецкие ЭС": TIKHORETSK_URL_RK_SP,
+    "Сочинские ЭС": SOCHI_URL_RK_SP,
+    "Славянские ЭС": SLAVYANSK_URL_RK_SP,
+    "Ленинградские ЭС": LENINGRADSK_URL_RK_SP,
+    "Лабинские ЭС": LABINSK_URL_RK_SP,
+    "Краснодарские ЭС": KRASNODAR_URL_RK_SP,
+    "Армавирские ЭС": ARMAVIR_URL_RK_SP,
+    "Адыгейские ЭС": ADYGEYSK_URL_RK_SP,
 }
 
 # Load user data from CSV for access control
@@ -95,6 +123,30 @@ def load_tp_data(es_name, is_rosseti_yug):
         logger.error(f"Ошибка при загрузке данных ТП для {es_name}: {e}")
         return pd.DataFrame()
 
+# Load TP directory data for notifications
+def load_tp_directory_data(es_name, is_rosseti_yug):
+    suffix = "_UG" if is_rosseti_yug else "_RK"
+    es_key = es_name if not es_name.startswith("Юго-Западные ЭС") else f"Юго-Западные ЭС{suffix}"
+    url = ES_SP_URL_MAPPING.get(es_key)
+    if not url:
+        logger.error(f"URL справочника для {es_name} не найден")
+        return pd.DataFrame()
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        df = pd.read_csv(url, encoding="utf-8")
+        return df
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке справочника для {es_name}: {e}")
+        return pd.DataFrame()
+
+# Find responsible user for RES
+def find_responsible(res, users):
+    for user_id, user_data in users.items():
+        if user_data["Responsible"] == res:
+            return user_id, user_data["FIO"]
+    return None, None
+
 # Check user visibility for a specific menu item
 def has_access(user_data, required_visibility):
     if not user_data:
@@ -109,10 +161,10 @@ def has_access(user_data, required_visibility):
 # Define main menu buttons with visibility
 MAIN_MENU = [
     {"text": "Россети Кубань ⚡️", "visibility": "all"},
-    {"text": "Россети ЮГ 🔌", "visibility": "all"},
+    {"text": "Россети ЮГ ⚡️", "visibility": "all"},
     {"text": "Выгрузить отчеты 📊", "visibility": "all"},
     {"text": "Телефонный справочник 📞", "visibility": "all"},
-    {"text": "Справка ❓", "visibility": "all"},
+    {"text": "Справка 📚", "visibility": "all"},
     {"text": "Руководство пользователя 📖", "visibility": "all"},
 ]
 
@@ -148,8 +200,8 @@ ROSSETI_KUBAN_MENU = [
 # Define ES submenu with visibility
 ES_SUBMENU = [
     {"text": "Поиск по ТП 🔍", "visibility": "all"},
-    {"text": "Отправить уведомление о БД ВОЛС 📬", "visibility": "all"},
-    {"text": "Справка ❓", "visibility": "all"},
+    {"text": "Отправить уведомление 🔔", "visibility": "all"},
+    {"text": "Справка 📚", "visibility": "all"},
     {"text": "Назад ⬅️", "visibility": "all"},
 ]
 
@@ -176,6 +228,12 @@ def build_es_submenu(user_data):
 # Build TP selection keyboard
 def build_tp_selection_menu(tp_options):
     keyboard = [[tp] for tp in tp_options]
+    keyboard.append(["Отмена 🚫"])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# Build VL selection keyboard
+def build_vl_selection_menu(vl_options):
+    keyboard = [[vl] for vl in vl_options]
     keyboard.append(["Отмена 🚫"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -238,7 +296,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "Выберите ЭС:", reply_markup=build_rosseti_kuban_menu(user_data)
             )
-        elif text == "Россети ЮГ 🔌" and has_access(user_data, "all"):
+        elif text == "Россети ЮГ ⚡️" and has_access(user_data, "all"):
             context.user_data["state"] = "ROSSETI_YUG"
             context.user_data["previous_state"] = "MAIN_MENU"
             context.user_data["is_rosseti_yug"] = True
@@ -249,8 +307,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Выгрузка отчетов 📊. Функционал в разработке.")
         elif text == "Телефонный справочник 📞" and has_access(user_data, "all"):
             await update.message.reply_text("Телефонный справочник 📞. Функционал в разработке.")
-        elif text == "Справка ❓" and has_access(user_data, "all"):
-            await update.message.reply_text("Справка ❓. Функционал в разработке.")
+        elif text == "Справка 📚" and has_access(user_data, "all"):
+            await update.message.reply_text("Справка 📚. Функционал в разработке.")
         elif text == "Руководство пользователя 📖" and has_access(user_data, "all"):
             await update.message.reply_text("Руководство пользователя 📖. Функционал в разработке.")
         else:
@@ -305,10 +363,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Введите наименование ТП для поиска в {selected_es}:", reply_markup=ReplyKeyboardRemove()
             )
             return SEARCH_TP
-        elif text == "Отправить уведомление о БД ВОЛС 📬" and has_access(user_data, "all"):
-            await update.message.reply_text(f"Отправка уведомления для {selected_es} 📬. Функционал в разработке.")
-        elif text == "Справка ❓" and has_access(user_data, "all"):
-            await update.message.reply_text(f"Справка для {selected_es} ❓. Функционал в разработке.")
+        elif text == "Отправить уведомление 🔔" and has_access(user_data, "all"):
+            await update.message.reply_text(
+                f"Введите наименование ТП для уведомления в {selected_es}:", reply_markup=ReplyKeyboardRemove()
+            )
+            return NOTIFY_TP
+        elif text == "Справка 📚" and has_access(user_data, "all"):
+            await update.message.reply_text(f"Справка 📚. Функционал в разработке.")
         elif text == "Назад ⬅️" and has_access(user_data, "all"):
             previous_state = context.user_data.get("previous_state", "MAIN_MENU")
             context.user_data["state"] = previous_state
@@ -351,7 +412,7 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Exact match
     exact_match = df[df["Наименование ТП"] == search_term]
     if not exact_match.empty:
-        await send_tp_results(update, context, exact_match, selected_es)
+        await send_tp_results(update, context, exact_match, selected_es, search_term)
         context.user_data["state"] = "ES_SUBMENU"
         await update.message.reply_text(
             f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
@@ -374,7 +435,7 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SELECT_TP
 
-# Select TP handler
+# Select TP handler (for search)
 async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     users = load_user_data()
@@ -400,7 +461,7 @@ async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text in context.user_data.get("tp_options", []):
         df_filtered = df[df["Наименование ТП"] == text]
-        await send_tp_results(update, context, df_filtered, selected_es)
+        await send_tp_results(update, context, df_filtered, selected_es, text)
         context.user_data["state"] = "ES_SUBMENU"
         await update.message.reply_text(
             f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
@@ -413,29 +474,183 @@ async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return SELECT_TP
 
+# Notify TP handler
+async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    users = load_user_data()
+    user_data = users.get(user_id)
+
+    if not user_data:
+        await update.message.reply_text(
+            "Извините, вы не зарегистрированы в системе.", reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
+
+    search_term = update.message.text
+    selected_es = context.user_data.get("selected_es", "")
+    is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
+    df = load_tp_directory_data(selected_es, is_rosseti_yug)
+
+    if df.empty:
+        await update.message.reply_text(
+            f"Ошибка загрузки справочника для {selected_es}. Попробуйте позже.", 
+            reply_markup=build_es_submenu(user_data)
+        )
+        context.user_data["state"] = "ES_SUBMENU"
+        return ConversationHandler.END
+
+    # Exact match
+    exact_match = df[df["Наименование ТП"] == search_term]
+    if not exact_match.empty:
+        vl_options = exact_match["Наименование ВЛ"].dropna().unique().tolist()
+        context.user_data["selected_tp"] = search_term
+        context.user_data["vl_options"] = vl_options
+        await update.message.reply_text(
+            f"Выберите ВЛ для ТП {search_term}:", 
+            reply_markup=build_vl_selection_menu(vl_options)
+        )
+        return NOTIFY_VL
+
+    # Fuzzy search
+    tp_options = fuzzy_search_tp(search_term, df)
+    if not tp_options:
+        await update.message.reply_text(
+            f"ТП с названием '{search_term}' не найдено в справочнике {selected_es}. Попробуйте еще раз:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return NOTIFY_TP
+
+    context.user_data["tp_options"] = tp_options
+    await update.message.reply_text(
+        f"ТП с названием '{search_term}' не найдено. Похожие варианты:", 
+        reply_markup=build_tp_selection_menu(tp_options)
+    )
+    return NOTIFY_TP
+
+# Notify VL handler
+async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    users = load_user_data()
+    user_data = users.get(user_id)
+
+    if not user_data:
+        await update.message.reply_text(
+            "Извините, вы не зарегистрированы в системе.", reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
+
+    text = update.message.text
+    selected_es = context.user_data.get("selected_es", "")
+    vl_options = context.user_data.get("vl_options", [])
+
+    if text == "Отмена 🚫":
+        context.user_data["state"] = "ES_SUBMENU"
+        await update.message.reply_text(
+            f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
+        )
+        return ConversationHandler.END
+
+    if text in vl_options:
+        context.user_data["selected_vl"] = text
+        await update.message.reply_text(
+            "Введите геоданные (например, 45.123, 38.456):", reply_markup=ReplyKeyboardRemove()
+        )
+        return NOTIFY_GEO
+
+    # Check if it's a TP selection from fuzzy search
+    is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
+    df = load_tp_directory_data(selected_es, is_rosseti_yug)
+    if text in context.user_data.get("tp_options", []):
+        context.user_data["selected_tp"] = text
+        vl_options = df[df["Наименование ТП"] == text]["Наименование ВЛ"].dropna().unique().tolist()
+        context.user_data["vl_options"] = vl_options
+        await update.message.reply_text(
+            f"Выберите ВЛ для ТП {text}:", 
+            reply_markup=build_vl_selection_menu(vl_options)
+        )
+        return NOTIFY_VL
+
+    await update.message.reply_text(
+        "Пожалуйста, выберите ВЛ из предложенных вариантов:", 
+        reply_markup=build_vl_selection_menu(vl_options)
+    )
+    return NOTIFY_VL
+
+# Notify Geo handler
+async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    users = load_user_data()
+    user_data = users.get(user_id)
+
+    if not user_data:
+        await update.message.reply_text(
+            "Извините, вы не зарегистрированы в системе.", reply_markup=ReplyKeyboardRemove()
+        )
+        return ConversationHandler.END
+
+    geo_data = update.message.text
+    selected_es = context.user_data.get("selected_es", "")
+    selected_tp = context.user_data.get("selected_tp", "")
+    selected_vl = context.user_data.get("selected_vl", "")
+    is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
+    df = load_tp_directory_data(selected_es, is_rosseti_yug)
+
+    # Find RES for the selected TP and VL
+    res = df[(df["Наименование ТП"] == selected_tp) & (df["Наименование ВЛ"] == selected_vl)]["РЭС"].iloc[0] if not df.empty else None
+    if not res:
+        await update.message.reply_text(
+            f"Ошибка: не найден РЭС для ТП {selected_tp} и ВЛ {selected_vl}.",
+            reply_markup=build_es_submenu(user_data)
+        )
+        context.user_data["state"] = "ES_SUBMENU"
+        return ConversationHandler.END
+
+    # Find responsible user
+    responsible_id, responsible_fio = find_responsible(res, users)
+    if not responsible_id:
+        await update.message.reply_text(
+            f"🚫 Ответственный по {res} не назначен!",
+            reply_markup=build_es_submenu(user_data)
+        )
+        context.user_data["state"] = "ES_SUBMENU"
+        return ConversationHandler.END
+
+    # Send notification to responsible
+    sender_fio = user_data["FIO"]
+    notification = f"⚠️ Уведомление! Найден бездоговорной ВОЛС! {sender_fio}, {selected_tp}, {selected_vl}. Геоданные."
+    await context.bot.send_message(chat_id=responsible_id, text=notification)
+    await context.bot.send_message(chat_id=responsible_id, text=geo_data)
+    await update.message.reply_text(
+        f"✅ Уведомление отправлено! {res}, {responsible_fio}.",
+        reply_markup=build_es_submenu(user_data)
+    )
+    context.user_data["state"] = "ES_SUBMENU"
+    return ConversationHandler.END
+
 # Send TP results
-async def send_tp_results(update: Update, context: ContextTypes.DEFAULT_TYPE, df, selected_es):
+async def send_tp_results(update: Update, context: ContextTypes.DEFAULT_TYPE, df, selected_es, tp_name):
     count = len(df)
-    await update.message.reply_text(f"В {selected_es} найдено {count} ВОЛС с договором аренды.")
+    res = df["РЭС"].iloc[0] if not df.empty else selected_es
+    await update.message.reply_text(f"В {res} на ТП {tp_name} найдено {count} ВОЛС с договором аренды.")
     
     for _, row in df.iterrows():
         message = (
-            f"🔌 ВЛ: {row['Наименование ВЛ']}\n"
+            f"📍 ВЛ: {row['Наименование ВЛ']}\n"
             f"Опоры: {row['Опоры']}\n"
             f"Количество: {row['Количество опор']}\n"
             f"Наименование Провайдера: {row['Наименование Провайдера']}"
         )
         await update.message.reply_text(message)
 
-# Cancel search
-async def cancel_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Cancel search or notification
+async def cancel_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     users = load_user_data()
     user_data = users.get(user_id)
     selected_es = context.user_data.get("selected_es", "")
     context.user_data["state"] = "ES_SUBMENU"
     await update.message.reply_text(
-        f"Поиск отменен. Выберите действие для {selected_es}:", 
+        f"Действие отменено. Выберите действие для {selected_es}:", 
         reply_markup=build_es_submenu(user_data)
     )
     return ConversationHandler.END
@@ -471,14 +686,17 @@ async def on_shutdown():
     await application.stop()
 
 def main():
-    # Conversation handler for TP search
+    # Conversation handler for TP search and notifications
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
             SEARCH_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_tp)],
             SELECT_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_tp)],
+            NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
+            NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
+            NOTIFY_GEO: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_geo)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_search)],
+        fallbacks=[CommandHandler("cancel", cancel_action)],
     )
 
     # Add handlers

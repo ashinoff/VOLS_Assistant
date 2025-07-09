@@ -4,6 +4,9 @@ import uvicorn
 import asyncio
 import re
 import requests
+import sqlite3
+import datetime
+import os
 from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -46,6 +49,40 @@ SELECT_TP = 1
 NOTIFY_TP = 2
 NOTIFY_VL = 3
 NOTIFY_GEO = 4
+REPORTS_MENU = 5
+
+# SQLite database setup
+def init_db():
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_yug (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch TEXT,
+            res TEXT,
+            sender_fio TEXT,
+            sender_id TEXT,
+            receiver_fio TEXT,
+            receiver_id TEXT,
+            timestamp TEXT,
+            coordinates TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_kuban (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch TEXT,
+            res TEXT,
+            sender_fio TEXT,
+            sender_id TEXT,
+            receiver_fio TEXT,
+            receiver_id TEXT,
+            timestamp TEXT,
+            coordinates TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 # Mapping of ES names to their URLs for TP search
 ES_URL_MAPPING = {
@@ -152,62 +189,82 @@ def find_responsible(res, users):
     return None, None
 
 # Check user visibility for a specific menu item
-def has_access(user_data, required_visibility):
+def has_access(user_data, required_visibility, required_branch=None):
     if not user_data:
         return False
     user_visibility = user_data.get("Visibility", "").lower()
-    return (
-        user_visibility == "all"
-        or required_visibility.lower() == "all"
-        or user_visibility == required_visibility.lower()
-    )
+    user_branch = user_data.get("Branch", "").lower()
+
+    if user_visibility not in ["all", "rk", "ug"]:
+        return False
+    if required_visibility.lower() == "all":
+        visibility_match = True
+    elif required_visibility.lower() in ["rk", "ug"]:
+        visibility_match = user_visibility in ["all", required_visibility.lower()]
+    else:
+        visibility_match = False
+
+    if required_branch:
+        required_branch = required_branch.lower()
+        branch_match = user_branch in ["all", required_branch]
+    else:
+        branch_match = True
+
+    return visibility_match and branch_match
 
 # Define main menu buttons with visibility
 MAIN_MENU = [
-    {"text": "⚡️ Россети ЮГ", "visibility": "all"},
-    {"text": "⚡️ Россети Кубань", "visibility": "all"},
-    {"text": "📊 Выгрузить отчеты", "visibility": "all"},
-    {"text": "📞 Телефонный справочник", "visibility": "all"},
-    {"text": "📖 Руководство пользователя", "visibility": "all"},
-    {"text": "📚 Справка", "visibility": "all"},
-    {"text": "⬅️ Назад", "visibility": "all"},
+    {"text": "⚡️ Россети ЮГ", "visibility": "UG"},
+    {"text": "⚡️ Россети Кубань", "visibility": "RK"},
+    {"text": "📊 Выгрузить отчеты", "visibility": "All"},
+    {"text": "📞 Телефонный справочник", "visibility": "All"},
+    {"text": "📖 Руководство пользователя", "visibility": "All"},
+    {"text": "📚 Справка", "visibility": "All"},
+    {"text": "⬅️ Назад", "visibility": "All"},
 ]
 
-# Define Rosseti Yug submenu with visibility
+# Define Rosseti Yug submenu with visibility and branch
 ROSSETI_YUG_MENU = [
-    {"text": "⚡️ Юго-Западные ЭС", "visibility": "yugo_zapad_yug"},
-    {"text": "⚡️ Центральные ЭС", "visibility": "central_yug"},
-    {"text": "⚡️ Западные ЭС", "visibility": "zapad_yug"},
-    {"text": "⚡️ Восточные ЭС", "visibility": "vostoch_yug"},
-    {"text": "⚡️ Южные ЭС", "visibility": "yuzh_yug"},
-    {"text": "⚡️ Северо-Восточные ЭС", "visibility": "severo_vostoch_yug"},
-    {"text": "⚡️ Юго-Восточные ЭС", "visibility": "yugo_vostoch_yug"},
-    {"text": "⚡️ Северные ЭС", "visibility": "sever_yug"},
-    {"text": "⬅️ Назад", "visibility": "all"},
+    {"text": "⚡️ Юго-Западные ЭС", "visibility": "UG", "branch": "Юго-Западные ЭС"},
+    {"text": "⚡️ Центральные ЭС", "visibility": "UG", "branch": "Центральные ЭС"},
+    {"text": "⚡️ Западные ЭС", "visibility": "UG", "branch": "Западные ЭС"},
+    {"text": "⚡️ Восточные ЭС", "visibility": "UG", "branch": "Восточные ЭС"},
+    {"text": "⚡️ Южные ЭС", "visibility": "UG", "branch": "Южные ЭС"},
+    {"text": "⚡️ Северо-Восточные ЭС", "visibility": "UG", "branch": "Северо-Восточные ЭС"},
+    {"text": "⚡️ Юго-Восточные ЭС", "visibility": "UG", "branch": "Юго-Восточные ЭС"},
+    {"text": "⚡️ Северные ЭС", "visibility": "UG", "branch": "Северные ЭС"},
+    {"text": "⬅️ Назад", "visibility": "All"},
 ]
 
-# Define Rosseti Kuban submenu with visibility
+# Define Rosseti Kuban submenu with visibility and branch
 ROSSETI_KUBAN_MENU = [
-    {"text": "⚡️ Юго-Западные ЭС", "visibility": "yugo_zapad_kuban"},
-    {"text": "⚡️ Усть-Лабинские ЭС", "visibility": "ust_labinsk_kuban"},
-    {"text": "⚡️ Тимашевские ЭС", "visibility": "timashevsk_kuban"},
-    {"text": "⚡️ Тихорецкие ЭС", "visibility": "tikhoretsk_kuban"},
-    {"text": "⚡️ Сочинские ЭС", "visibility": "sochi_kuban"},
-    {"text": "⚡️ Славянские ЭС", "visibility": "slavyansk_kuban"},
-    {"text": "⚡️ Ленинградские ЭС", "visibility": "leningradsk_kuban"},
-    {"text": "⚡️ Лабинские ЭС", "visibility": "labinsk_kuban"},
-    {"text": "⚡️ Краснодарские ЭС", "visibility": "krasnodar_kuban"},
-    {"text": "⚡️ Армавирские ЭС", "visibility": "armavir_kuban"},
-    {"text": "⚡️ Адыгейские ЭС", "visibility": "adygeysk_kuban"},
-    {"text": "⬅️ Назад", "visibility": "all"},
+    {"text": "⚡️ Юго-Западные ЭС", "visibility": "RK", "branch": "Юго-Западные ЭС"},
+    {"text": "⚡️ Усть-Лабинские ЭС", "visibility": "RK", "branch": "Усть-Лабинские ЭС"},
+    {"text": "⚡️ Тимашевские ЭС", "visibility": "RK", "branch": "Тимашевские ЭС"},
+    {"text": "⚡️ Тихорецкие ЭС", "visibility": "RK", "branch": "Тихорецкие ЭС"},
+    {"text": "⚡️ Сочинские ЭС", "visibility": "RK", "branch": "Сочинские ЭС"},
+    {"text": "⚡️ Славянские ЭС", "visibility": "RK", "branch": "Славянские ЭС"},
+    {"text": "⚡️ Ленинградские ЭС", "visibility": "RK", "branch": "Ленинградские ЭС"},
+    {"text": "⚡️ Лабинские ЭС", "visibility": "RK", "branch": "Лабинские ЭС"},
+    {"text": "⚡️ Краснодарские ЭС", "visibility": "RK", "branch": "Краснодарские ЭС"},
+    {"text": "⚡️ Армавирские ЭС", "visibility": "RK", "branch": "Армавирские ЭС"},
+    {"text": "⚡️ Адыгейские ЭС", "visibility": "RK", "branch": "Адыгейские ЭС"},
+    {"text": "⬅️ Назад", "visibility": "All"},
 ]
 
 # Define ES submenu with visibility
 ES_SUBMENU = [
-    {"text": "🔍 Поиск по ТП", "visibility": "all"},
-    {"text": "🔔 Отправить уведомление", "visibility": "all"},
-    {"text": "📚 Справка", "visibility": "all"},
-    {"text": "⬅️ Назад", "visibility": "all"},
+    {"text": "🔍 Поиск по ТП", "visibility": "All"},
+    {"text": "🔔 Отправить уведомление", "visibility": "All"},
+    {"text": "📚 Справка", "visibility": "All"},
+    {"text": "⬅️ Назад", "visibility": "All"},
+]
+
+# Define Reports submenu
+REPORTS_MENU = [
+    {"text": "📤 Выгрузка уведомлений Россети ЮГ", "visibility": "UG"},
+    {"text": "📤 Выгрузка уведомлений Россети Кубань", "visibility": "RK"},
+    {"text": "⬅️ Назад", "visibility": "All"},
 ]
 
 # Build main menu based on user visibility
@@ -215,19 +272,24 @@ def build_main_menu(user_data):
     keyboard = [[button["text"]] for button in MAIN_MENU if has_access(user_data, button["visibility"])]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
 
-# Build Rosseti Yug submenu based on user visibility
+# Build Rosseti Yug submenu based on user visibility and branch
 def build_rosseti_yug_menu(user_data):
-    keyboard = [[button["text"]] for button in ROSSETI_YUG_MENU if has_access(user_data, button["visibility"])]
+    keyboard = [[button["text"]] for button in ROSSETI_YUG_MENU if has_access(user_data, button["visibility"], button.get("branch"))]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
 
-# Build Rosseti Kuban submenu based on user visibility
+# Build Rosseti Kuban submenu based on user visibility and branch
 def build_rosseti_kuban_menu(user_data):
-    keyboard = [[button["text"]] for button in ROSSETI_KUBAN_MENU if has_access(user_data, button["visibility"])]
+    keyboard = [[button["text"]] for button in ROSSETI_KUBAN_MENU if has_access(user_data, button["visibility"], button.get("branch"))]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
 
 # Build ES submenu based on user visibility
 def build_es_submenu(user_data):
     keyboard = [[button["text"]] for button in ES_SUBMENU if has_access(user_data, button["visibility"])]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
+
+# Build Reports submenu
+def build_reports_menu(user_data):
+    keyboard = [[button["text"]] for button in REPORTS_MENU if has_access(user_data, button["visibility"])]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
 
 # Build TP selection keyboard
@@ -246,13 +308,11 @@ def build_vl_selection_menu(vl_options):
 def fuzzy_search_tp(search_term, df):
     if not isinstance(search_term, str):
         return []
-    # Normalize search term: remove hyphens, spaces, convert to lowercase
     search_term = re.sub(r'[- ]', '', search_term.lower())
     matches = []
     for tp in df["Наименование ТП"].dropna().unique():
         if not isinstance(tp, str):
             continue
-        # Normalize TP name
         normalized_tp = re.sub(r'[- ]', '', tp.lower())
         if search_term in normalized_tp:
             matches.append(tp)
@@ -292,46 +352,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = context.user_data.get("state", "MAIN_MENU")
 
-    # Main menu actions
     if state == "MAIN_MENU":
-        if text == "⚡️ Россети ЮГ" and has_access(user_data, "all"):
+        if text == "⚡️ Россети ЮГ" and has_access(user_data, "UG"):
             context.user_data["state"] = "ROSSETI_YUG"
             context.user_data["previous_state"] = "MAIN_MENU"
             context.user_data["is_rosseti_yug"] = True
             await update.message.reply_text(
                 "Выберите ЭС:", reply_markup=build_rosseti_yug_menu(user_data)
             )
-        elif text == "⚡️ Россети Кубань" and has_access(user_data, "all"):
+        elif text == "⚡️ Россети Кубань" and has_access(user_data, "RK"):
             context.user_data["state"] = "ROSSETI_KUBAN"
             context.user_data["previous_state"] = "MAIN_MENU"
             context.user_data["is_rosseti_yug"] = False
             await update.message.reply_text(
                 "Выберите ЭС:", reply_markup=build_rosseti_kuban_menu(user_data)
             )
-        elif text == "📊 Выгрузить отчеты" and has_access(user_data, "all"):
-            await update.message.reply_text("Выгрузка отчетов 📊. Функционал в разработке.")
-        elif text == "📞 Телефонный справочник" and has_access(user_data, "all"):
+        elif text == "📊 Выгрузить отчеты" and has_access(user_data, "All"):
+            context.user_data["state"] = "REPORTS_MENU"
+            context.user_data["previous_state"] = "MAIN_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
+        elif text == "📞 Телефонный справочник" and has_access(user_data, "All"):
             await update.message.reply_text("Телефонный справочник 📞. Функционал в разработке.")
-        elif text == "📖 Руководство пользователя" and has_access(user_data, "all"):
+        elif text == "📖 Руководство пользователя" and has_access(user_data, "All"):
             await update.message.reply_text("Руководство пользователя 📖. Функционал в разработке.")
-        elif text == "📚 Справка" and has_access(user_data, "all"):
+        elif text == "📚 Справка" and has_access(user_data, "All"):
             await update.message.reply_text("Справка 📚. Функционал в разработке.")
-        elif text == "⬅️ Назад" and has_access(user_data, "all"):
+        elif text == "⬅️ Назад" and has_access(user_data, "All"):
             await start(update, context)
         else:
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
-    # Rosseti Yug submenu actions
     elif state == "ROSSETI_YUG":
-        if text == "⬅️ Назад" and has_access(user_data, "all"):
+        if text == "⬅️ Назад" and has_access(user_data, "All"):
             context.user_data["state"] = "MAIN_MENU"
             await update.message.reply_text(
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
             )
         else:
             for button in ROSSETI_YUG_MENU:
-                if text == button["text"] and has_access(user_data, button["visibility"]):
+                if text == button["text"] and has_access(user_data, button["visibility"], button.get("branch")):
                     context.user_data["state"] = "ES_SUBMENU"
                     context.user_data["selected_es"] = text.replace("⚡️ ", "")
                     context.user_data["previous_state"] = "ROSSETI_YUG"
@@ -342,16 +404,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
         return ConversationHandler.END
 
-    # Rosseti Kuban submenu actions
     elif state == "ROSSETI_KUBAN":
-        if text == "⬅️ Назад" and has_access(user_data, "all"):
+        if text == "⬅️ Назад" and has_access(user_data, "All"):
             context.user_data["state"] = "MAIN_MENU"
             await update.message.reply_text(
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
             )
         else:
             for button in ROSSETI_KUBAN_MENU:
-                if text == button["text"] and has_access(user_data, button["visibility"]):
+                if text == button["text"] and has_access(user_data, button["visibility"], button.get("branch")):
                     context.user_data["state"] = "ES_SUBMENU"
                     context.user_data["selected_es"] = text.replace("⚡️ ", "")
                     context.user_data["previous_state"] = "ROSSETI_KUBAN"
@@ -362,23 +423,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
         return ConversationHandler.END
 
-    # ES submenu actions
     elif state == "ES_SUBMENU":
         selected_es = context.user_data.get("selected_es", "")
-        if text == "🔍 Поиск по ТП" and has_access(user_data, "all"):
+        if text == "🔍 Поиск по ТП" and has_access(user_data, "All"):
             await update.message.reply_text(
                 f"Введите наименование ТП для поиска в {selected_es}:", reply_markup=ReplyKeyboardRemove()
             )
             return SEARCH_TP
-        elif text == "🔔 Отправить уведомление" and has_access(user_data, "all"):
+        elif text == "🔔 Отправить уведомление" and has_access(user_data, "All"):
             back_button = [["⬅️ Назад"]]
             await update.message.reply_text(
                 "Введите наименование ТП где обнаружен бездоговорной ВОЛС:", reply_markup=ReplyKeyboardMarkup(back_button, resize_keyboard=True)
             )
             return NOTIFY_TP
-        elif text == "📚 Справка" and has_access(user_data, "all"):
+        elif text == "📚 Справка" and has_access(user_data, "All"):
             await update.message.reply_text(f"Справка 📚. Функционал в разработке.")
-        elif text == "⬅️ Назад" and has_access(user_data, "all"):
+        elif text == "⬅️ Назад" and has_access(user_data, "All"):
             previous_state = context.user_data.get("previous_state", "MAIN_MENU")
             context.user_data["state"] = previous_state
             if previous_state == "ROSSETI_YUG":
@@ -391,6 +451,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
+
+    elif state == "REPORTS_MENU":
+        if text == "📤 Выгрузка уведомлений Россети ЮГ" and has_access(user_data, "UG"):
+            await export_to_bot(update, context, "yug")
+            context.user_data["state"] = "REPORTS_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
+        elif text == "📤 Выгрузка уведомлений Россети Кубань" and has_access(user_data, "RK"):
+            await export_to_bot(update, context, "kuban")
+            context.user_data["state"] = "REPORTS_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
+        elif text == "⬅️ Назад" and has_access(user_data, "All"):
+            context.user_data["state"] = "MAIN_MENU"
+            await update.message.reply_text(
+                "Выберите действие:", reply_markup=build_main_menu(user_data)
+            )
+        else:
+            await update.message.reply_text("Пожалуйста, выберите действие из меню.")
+        return ConversationHandler.END
+
+# Export to bot
+async def export_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str):
+    table = "notifications_yug" if export_type == "yug" else "notifications_kuban"
+    filename = f"report_{export_type}.xlsx"
+    
+    try:
+        conn = sqlite3.connect("notifications.db")
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        conn.close()
+
+        if df.empty:
+            await update.message.reply_text("Нет данных для выгрузки.")
+            return
+
+        df.to_excel(filename, index=False)
+        with open(filename, "rb") as f:
+            await update.message.reply_document(document=f, filename=filename)
+        os.remove(filename)
+        await update.message.reply_text("Отчет успешно отправлен в бот!")
+    except Exception as e:
+        logger.error(f"Ошибка при выгрузке отчета: {e}")
+        await update.message.reply_text("Ошибка при выгрузке отчета. Попробуйте позже.")
 
 # Search TP handler
 async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -417,7 +522,6 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Exact match
     exact_match = df[df["Наименование ТП"] == search_term]
     if not exact_match.empty:
         await send_tp_results(update, context, exact_match, selected_es, search_term)
@@ -427,7 +531,6 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # Fuzzy search
     tp_options = fuzzy_search_tp(search_term, df)
     if not tp_options:
         await update.message.reply_text(
@@ -516,7 +619,6 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Exact match
     exact_match = df[df["Наименование ТП"] == search_term]
     if not exact_match.empty:
         vl_options = exact_match["Наименование ВЛ"].dropna().unique().tolist()
@@ -528,7 +630,6 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return NOTIFY_VL
 
-    # Fuzzy search
     tp_options = fuzzy_search_tp(search_term, df)
     if not tp_options:
         back_button = [["⬅️ Назад"]]
@@ -577,7 +678,6 @@ async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return NOTIFY_GEO
 
-    # Check if it's a TP selection from fuzzy search
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_directory_data(selected_es, is_rosseti_yug)
     if text in context.user_data.get("tp_options", []):
@@ -623,7 +723,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_directory_data(selected_es, is_rosseti_yug)
 
-    # Find RES for the selected TP and VL
     res = df[(df["Наименование ТП"] == selected_tp) & (df["Наименование ВЛ"] == selected_vl)]["РЭС"].iloc[0] if not df.empty else None
     if not res:
         await update.message.reply_text(
@@ -633,7 +732,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Find responsible user
     responsible_id, responsible_fio = find_responsible(res, users)
     if not responsible_id:
         await update.message.reply_text(
@@ -643,7 +741,22 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Send notification to responsible
+    # Log notification to SQLite
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+    table = "notifications_yug" if is_rosseti_yug else "notifications_kuban"
+    branch = "Россети ЮГ" if is_rosseti_yug else "Россети Кубань"
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        f"""
+        INSERT INTO {table} (branch, res, sender_fio, sender_id, receiver_fio, receiver_id, timestamp, coordinates)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (branch, res, user_data["FIO"], user_id, responsible_fio, responsible_id, timestamp, geo_data)
+    )
+    conn.commit()
+    conn.close()
+
     sender_fio = user_data["FIO"]
     notification = f"⚠️ Уведомление! Найден бездоговорной ВОЛС! {sender_fio}, {selected_tp}, {selected_vl}. Геоданные."
     await context.bot.send_message(chat_id=responsible_id, text=notification)
@@ -659,7 +772,7 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Send TP results
 async def send_tp_results(update: Update, context: ContextTypes.DEFAULT_TYPE, df, selected_es, tp_name):
     count = len(df)
-    res = df["РЭС"].iloc[0] if not df.empty else selected_es
+    res = df.get("РЭС", pd.Series([selected_es])).iloc[0] if not df.empty else selected_es
     await update.message.reply_text(f"В {res} на ТП {tp_name} найдено {count} ВОЛС с договором аренды.")
     
     for _, row in df.iterrows():
@@ -679,7 +792,7 @@ async def cancel_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected_es = context.user_data.get("selected_es", "")
     context.user_data["state"] = "ES_SUBMENU"
     await update.message.reply_text(
-        f"Действие отменено. Выберите действие для {selected_es}:", 
+        f"Действие отменено. Пожалуйста, выберите действие для {selected_es}:", 
         reply_markup=build_es_submenu(user_data)
     )
     return ConversationHandler.END
@@ -701,21 +814,24 @@ async def webhook(request: Request):
 async def root():
     return {"message": "Bot is running"}
 
-# FastAPI startup event to set webhook
-@app.on_event("startup")
-async def on_startup():
+# Lifespan event handler for startup and shutdown
+from contextlib import asynccontextmanager
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
     webhook_url = f"{SELF_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
     await application.initialize()
+    try:
+        yield
+    finally:
+        await application.stop()
 
-# FastAPI shutdown event
-@app.on_event("shutdown")
-async def on_shutdown():
-    await application.stop()
+app.lifespan = lifespan
 
 def main():
-    # Conversation handler for TP search and notifications
+    # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
@@ -724,6 +840,7 @@ def main():
             NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
             NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
             NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
+            REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         },
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )

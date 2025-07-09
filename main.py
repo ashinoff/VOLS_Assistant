@@ -63,7 +63,6 @@ EXPORT_SUBMENU = 6
 def init_db():
     conn = sqlite3.connect("notifications.db")
     cursor = conn.cursor()
-    # Table for Rosseti Yug notifications
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS notifications_yug (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +76,6 @@ def init_db():
             coordinates TEXT
         )
     """)
-    # Table for Rosseti Kuban notifications
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS notifications_kuban (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,7 +204,6 @@ def has_access(user_data, required_visibility, required_branch=None):
     user_visibility = user_data.get("Visibility", "").lower()
     user_branch = user_data.get("Branch", "").lower()
 
-    # Visibility check: All, RK, or UG
     if user_visibility not in ["all", "rk", "ug"]:
         return False
     if required_visibility.lower() == "all":
@@ -216,7 +213,6 @@ def has_access(user_data, required_visibility, required_branch=None):
     else:
         visibility_match = False
 
-    # Branch check: All or specific branch
     if required_branch:
         required_branch = required_branch.lower()
         branch_match = user_branch in ["all", required_branch]
@@ -333,13 +329,11 @@ def build_vl_selection_menu(vl_options):
 def fuzzy_search_tp(search_term, df):
     if not isinstance(search_term, str):
         return []
-    # Normalize search term: remove hyphens, spaces, convert to lowercase
     search_term = re.sub(r'[- ]', '', search_term.lower())
     matches = []
     for tp in df["Наименование ТП"].dropna().unique():
         if not isinstance(tp, str):
             continue
-        # Normalize TP name
         normalized_tp = re.sub(r'[- ]', '', tp.lower())
         if search_term in normalized_tp:
             matches.append(tp)
@@ -379,7 +373,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = context.user_data.get("state", "MAIN_MENU")
 
-    # Main menu actions
     if state == "MAIN_MENU":
         if text == "⚡️ Россети ЮГ" and has_access(user_data, "UG"):
             context.user_data["state"] = "ROSSETI_YUG"
@@ -413,7 +406,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
-    # Rosseti Yug submenu actions
     elif state == "ROSSETI_YUG":
         if text == "⬅️ Назад" and has_access(user_data, "All"):
             context.user_data["state"] = "MAIN_MENU"
@@ -433,7 +425,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
         return ConversationHandler.END
 
-    # Rosseti Kuban submenu actions
     elif state == "ROSSETI_KUBAN":
         if text == "⬅️ Назад" and has_access(user_data, "All"):
             context.user_data["state"] = "MAIN_MENU"
@@ -453,7 +444,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
         return ConversationHandler.END
 
-    # ES submenu actions
     elif state == "ES_SUBMENU":
         selected_es = context.user_data.get("selected_es", "")
         if text == "🔍 Поиск по ТП" and has_access(user_data, "All"):
@@ -483,7 +473,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
-    # Reports submenu actions
     elif state == "REPORTS_MENU":
         if text == "📤 Выгрузка уведомлений Россети ЮГ" and has_access(user_data, "UG"):
             context.user_data["state"] = "EXPORT_SUBMENU"
@@ -506,7 +495,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
-    # Export submenu actions
     elif state == "EXPORT_SUBMENU":
         export_type = context.user_data.get("export_type", "")
         if text == "🤖 Выгрузить в бот" and has_access(user_data, "All"):
@@ -555,7 +543,6 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Exact match
     exact_match = df[df["Наименование ТП"] == search_term]
     if not exact_match.empty:
         await send_tp_results(update, context, exact_match, selected_es, search_term)
@@ -565,7 +552,6 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # Fuzzy search
     tp_options = fuzzy_search_tp(search_term, df)
     if not tp_options:
         await update.message.reply_text(
@@ -655,7 +641,6 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Exact match
     exact_match = df[df["Наименование ТП"] == search_term]
     if not exact_match.empty:
         vl_options = exact_match["Наименование ВЛ"].dropna().unique().tolist()
@@ -667,7 +652,6 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return NOTIFY_VL
 
-    # Fuzzy search
     tp_options = fuzzy_search_tp(search_term, df)
     if not tp_options:
         back_button = [["⬅️ Назад"]]
@@ -716,7 +700,6 @@ async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return NOTIFY_GEO
 
-    # Check if it's a TP selection from fuzzy search
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_directory_data(selected_es, is_rosseti_yug)
     if text in context.user_data.get("tp_options", []):
@@ -762,7 +745,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_directory_data(selected_es, is_rosseti_yug)
 
-    # Find RES for the selected TP and VL
     res = df[(df["Наименование ТП"] == selected_tp) & (df["Наименование ВЛ"] == selected_vl)]["РЭС"].iloc[0] if not df.empty else None
     if not res:
         await update.message.reply_text(
@@ -772,7 +754,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Find responsible user
     responsible_id, responsible_fio = find_responsible(res, users)
     if not responsible_id:
         await update.message.reply_text(
@@ -782,7 +763,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
-    # Log notification to SQLite
     conn = sqlite3.connect("notifications.db")
     cursor = conn.cursor()
     table = "notifications_yug" if is_rosseti_yug else "notifications_kuban"
@@ -798,7 +778,6 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-    # Send notification to responsible
     sender_fio = user_data["FIO"]
     notification = f"⚠️ Уведомление! Найден бездоговорной ВОЛС! {sender_fio}, {selected_tp}, {selected_vl}. Геоданные."
     await context.bot.send_message(chat_id=responsible_id, text=notification)
@@ -928,8 +907,7 @@ async def root():
 # Lifespan event handler for startup and shutdown
 @asynccontextmanager
 async def lifespan(app):
-    # Startup
-    init_db()  # Initialize SQLite database
+    init_db()
     webhook_url = f"{SELF_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
@@ -937,14 +915,11 @@ async def lifespan(app):
     try:
         yield
     finally:
-        # Shutdown
         await application.stop()
 
-# Attach lifespan to FastAPI app
 app.lifespan = lifespan
 
 def main():
-    # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
@@ -959,12 +934,10 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )
 
-    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
 
-    # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":

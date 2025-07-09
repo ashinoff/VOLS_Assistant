@@ -1,6 +1,7 @@
 import logging
 import pandas as pd
 import uvicorn
+import asyncio
 from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -147,11 +148,6 @@ async def webhook(request: Request):
 async def root():
     return {"message": "Bot is running"}
 
-async def setup_webhook():
-    webhook_url = f"{SELF_URL}/webhook"
-    await application.bot.set_webhook(url=webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
-
 def main():
     global application
     # Initialize bot
@@ -163,7 +159,9 @@ def main():
     application.add_error_handler(error_handler)
 
     # Set webhook
-    application.run_coroutine(setup_webhook())
+    webhook_url = f"{SELF_URL}/webhook"
+    asyncio.run(application.bot.set_webhook(url=webhook_url))
+    logger.info(f"Webhook set to {webhook_url}")
 
     # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)

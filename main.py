@@ -1,5 +1,5 @@
-import csv
 import logging
+import pandas as pd
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -7,6 +7,8 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
+from config import BOT_TOKEN, ZONES_CSV_URL
+from keep_alive import keep_alive
 
 # Configure logging
 logging.basicConfig(
@@ -14,25 +16,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Path to zones file
-ZONES_FILE = "zones_rk_ug.csv"
-
-# Load user data from CSV
+# Load user data from CSV on Google Drive
 def load_user_data():
     users = {}
     try:
-        with open(ZONES_FILE, newline="", encoding="utf-8") as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                users[row["Telegram ID"]] = {
-                    "Visibility": row["Visibility"],
-                    "Branch": row["Филиал"],
-                    "RES": row["РЭС"],
-                    "FIO": row["ФИО"],
-                    "Responsible": row["Ответственный"],
-                }
-    except FileNotFoundError:
-        logger.error(f"Zones file {ZONES_FILE} not found.")
+        df = pd.read_csv(ZONES_CSV_URL, encoding="utf-8")
+        for _, row in df.iterrows():
+            users[str(row["Telegram ID"])] = {
+                "Visibility": row["Видимость"],
+                "Branch": row["Филиал"],
+                "RES": row["РЭС"],
+                "FIO": row["ФИО"],
+                "Responsible": row["Ответственный"],
+            }
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных пользователей: {e}")
     return users
 
 # Check user visibility for a specific menu item
@@ -106,16 +104,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Здравствуйте, {fio}! Выберите действие:", reply_markup=keyboard
     )
 
-# Button callback handler (placeholder for future functionality)
+# Button callback handler
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Placeholder responses for each button
+    # Placeholder responses
     callback_data = query.data
     responses = {
         "rosseti_kuban": "Добро пожаловать в раздел Россети Кубань ⚡️. Функциональность в разработке.",
-        "rosseti_yug": "Добро пожаловать в раздел Россети ЮГ ⚡️. Функциональность в разработке.",
+        "rosseti_yug": "Добро пожаловать в раздел Россети ЮГ 🔌. Функциональность в разработке.",
         "download_reports": "Выгрузка отчетов 📊. Функционал в разработке.",
         "phone_directory": "Телефонный справочник 📞. Функционал в разработке.",
         "help": "Справка ❓. Функционал в разработке.",
@@ -129,8 +127,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
 def main():
-    # Replace 'YOUR_TOKEN' with your bot token
-    application = Application.builder().token("YOUR_TOKEN").build()
+    # Start keep alive
+    keep_alive()
+
+    # Initialize bot
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))

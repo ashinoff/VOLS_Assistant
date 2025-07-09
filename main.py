@@ -1,8 +1,7 @@
 import logging
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI
-from threading import Thread
+from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -10,8 +9,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
-from config import TOKEN, ZONES_CSV_URL, PORT
-from keep_alive import keep_alive
+from config import TOKEN, ZONES_CSV_URL, SELF_URL, PORT
 
 # Configure logging
 logging.basicConfig(
@@ -19,12 +17,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app for Render
+# Initialize FastAPI app
 app = FastAPI()
 
-@app.get("/")
-async def root():
-    return {"message": "Bot is running"}
+# Initialize Telegram application
+application = None
 
 # Load user data from CSV on Google Drive
 def load_user_data():
@@ -136,7 +133,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
-def run_bot():
+# Webhook endpoint
+@app.post("/webhook")
+async def webhook(request: Request):
+    if application is None:
+        raise HTTPException(status_code=503, detail="Bot not initialized")
+    update = Update.de_json(await request.json(), application.bot)
+    await application.process_update(update)
+    return {"status": "ok"}
+
+async def setup_webhook():
+    webhook_url = f"{SELF_URL}/webhook"
+    await application.bot.set_webhook(url=webhook_url)
+    logger.info(f"Webhook set to {webhook_url}")
+
+def main():
+    global application
     # Initialize bot
     application = Application.builder().token(TOKEN).build()
 
@@ -145,18 +157,10 @@ def run_bot():
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_error_handler(error_handler)
 
-    # Start polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Set webhook
+    application.run_async(setup_webhook())
 
-def main():
-    # Start keep alive
-    keep_alive()
-
-    # Start bot in a separate thread
-    bot_thread = Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-
-    # Start FastAPI server for Render
+    # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":

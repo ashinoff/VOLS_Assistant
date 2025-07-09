@@ -833,14 +833,14 @@ app.lifespan = lifespan
 def main():
     # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+        entry_points=[MessageHandler(filters.TEXT, handle_message)],  # Упрощён фильтр
         states={
-            SEARCH_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_tp)],
-            SELECT_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_tp)],
-            NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
-            NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
+            SEARCH_TP: [MessageHandler(filters.TEXT, search_tp)],  # Упрощён фильтр
+            SELECT_TP: [MessageHandler(filters.TEXT, select_tp)],  # Упрощён фильтр
+            NOTIFY_TP: [MessageHandler(filters.TEXT, notify_tp)],  # Упрощён фильтр
+            NOTIFY_VL: [MessageHandler(filters.TEXT, notify_vl)],  # Упрощён фильтр
             NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
-            REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+            REPORTS_MENU: [MessageHandler(filters.TEXT, handle_message)],  # Упрощён фильтр
         },
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )

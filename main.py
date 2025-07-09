@@ -412,6 +412,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["state"] = "MAIN_MENU"
             await update.message.reply_text(
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
+            )
         else:
             for button in ROSSETI_YUG_MENU:
                 if text == button["text"] and has_access(user_data, button["visibility"], button.get("branch")):
@@ -420,6 +421,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context.user_data["previous_state"] = "ROSSETI_YUG"
                     await update.message.reply_text(
                         f"Вы выбрали {text.replace('⚡️ ', '')}. Выберите действие:", reply_markup=build_es_submenu(user_data)
+                    )
                     return ConversationHandler.END
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
         return ConversationHandler.END
@@ -484,7 +486,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         elif text == "📤 Выгрузка уведомлений Россети Кубань" and has_access(user_data, "RK"):
             context.user_data["state"] = "EXPORT_SUBMENU"
-            context.user_data["export_type"] = "kuban"]
+            context.user_data["export_type"] = "kuban"
             await update.message.reply_text(
                 "Выберите действие для выгрузки уведомлений Россети Кубань:", reply_markup=build_export_submenu(user_data)
             )
@@ -494,7 +496,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
             )
         else:
-            await update.message.reply_text("Пбравка("Пожалуйста, выберите действие из меню.")
+            await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
     # Export submenu actions
@@ -569,8 +571,8 @@ async def search_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"ТП с названием '{search_term}' не найдено. Похожие варианты:", 
         reply_markup=build_tp_selection_menu(tp_options)
-        )
-        return SELECT_TP
+    )
+    return SELECT_TP
 
 # Select TP handler (for search)
 async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -607,10 +609,9 @@ async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "Пожалуйста, выберите ТП из предложенных вариантов:", 
-        reply_markup=build_reply_selection_menu(
-            context.user_data.get("tp_options", []))
-        )
-        return SELECT_TP
+        reply_markup=build_tp_selection_menu(context.user_data.get("tp_options", []))
+    )
+    return SELECT_TP
 
 # Notify TP handler
 async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -630,7 +631,7 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         await update.message.reply_text(
             f"Выберите действие для {selected_es}:", 
-            reply_markup=build_reply_submenu(user_data)
+            reply_markup=build_es_submenu(user_data)
         )
         return ConversationHandler.END
 
@@ -673,8 +674,8 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"ТП с названием '{search_term}' не найдено. Похожие варианты:", 
         reply_markup=build_tp_selection_menu(tp_options)
-        )
-        return NOTIFY_TP
+    )
+    return NOTIFY_TP
 
 # Notify VL handler
 async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -777,8 +778,8 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Log notification to SQLite
     conn = sqlite3.connect("notifications.db")
     cursor = conn.cursor()
-    table = "notifications_{yug}" if is_rosseti_yug else "notifications_kuban"
-    branch = "Россети ЮГ" if is_rossети_yug else "Россети Кубань"
+    table = "notifications_yug" if is_rosseti_yug else "notifications_kuban"
+    branch = "Россети ЮГ" if is_rosseti_yug else "Россети Кубань"
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute(
         f"""
@@ -804,13 +805,13 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # Export to bot
-def export_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str):
-    async table = "notifications_yug" if export_type == "yug" else "notifications_kuban"
-    filename = f"report_f"{export_type}.xlsx"
+async def export_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str):
+    table = "notifications_yug" if export_type == "yug" else "notifications_kuban"
+    filename = f"report_{export_type}.xlsx"
     
     try:
         conn = sqlite3.connect("notifications.db")
-        df = pd.read_sql_query(f"SELECT FROM {table}", conn)
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
         conn.close()
 
         if df.empty:
@@ -824,7 +825,7 @@ def export_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE, export_typ
         await update.message.reply_text("Отчет успешно отправлен в бот!")
     except Exception as e:
         logger.error(f"Ошибка при выгрузке отчета: {e}")
-        await update.message.reply_text("Ошибка при выгрузке отчета. Пробуйте позже.")
+        await update.message.reply_text("Ошибка при выгрузке отчета. Попробуйте позже.")
 
 # Export to email
 async def export_to_email(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str, user_data: dict):

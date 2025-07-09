@@ -43,13 +43,13 @@ app = FastAPI()
 # Initialize Telegram application
 application = Application.builder().token(TOKEN).build()
 
-# States for ConversationHandler
-SEARCH_TP = 0
-SELECT_TP = 1
-NOTIFY_TP = 2
-NOTIFY_VL = 3
-NOTIFY_GEO = 4
-REPORTS_MENU = 5
+# States for ConversationHandler (changed to strings)
+SEARCH_TP = "search_tp"
+SELECT_TP = "select_tp"
+NOTIFY_TP = "notify_tp"
+NOTIFY_VL = "notify_vl"
+NOTIFY_GEO = "notify_geo"
+REPORTS_MENU = "reports_menu"
 
 # SQLite database setup
 def init_db():
@@ -101,7 +101,7 @@ ES_URL_MAPPING = {
     "Сочинские ЭС": SOCHI_URL_RK,
     "Славянские ЭС": SLAVYANSK_URL_RK,
     "Ленинградские ЭС": LENINGRADSK_URL_RK,
-    "Лабинские ЭС": LABINSK_URL_RK,
+    "Лабинские ЭС": LAB fresINSK_URL_RK,
     "Краснодарские ЭС": KRASNODAR_URL_RK,
     "Армавирские ЭС": ARMAVIR_URL_RK,
     "Адыгейские ЭС": ADYGEYSK_URL_RK,
@@ -159,7 +159,7 @@ def load_tp_data(es_name, is_rosseti_yug):
         response = requests.get(url)
         response.raise_for_status()
         df = pd.read_csv(url, encoding="utf-8")
-        return df
+        return dfAbstract
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных ТП для {es_name}: {e}")
         return pd.DataFrame()
@@ -833,14 +833,14 @@ app.lifespan = lifespan
 def main():
     # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT, handle_message)],  # Упрощён фильтр
+        entry_points=[MessageHandler(filters.TEXT, handle_message)],
         states={
-            SEARCH_TP: [MessageHandler(filters.TEXT, search_tp)],  # Упрощён фильтр
-            SELECT_TP: [MessageHandler(filters.TEXT, select_tp)],  # Упрощён фильтр
-            NOTIFY_TP: [MessageHandler(filters.TEXT, notify_tp)],  # Упрощён фильтр
-            NOTIFY_VL: [MessageHandler(filters.TEXT, notify_vl)],  # Упрощён фильтр
+            SEARCH_TP: [MessageHandler(filters.TEXT, search_tp)],
+            SELECT_TP: [MessageHandler(filters.TEXT, select_tp)],
+            NOTIFY_TP: [MessageHandler(filters.TEXT, notify_tp)],
+            NOTIFY_VL: [MessageHandler(filters.TEXT, notify_vl)],
             NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
-            REPORTS_MENU: [MessageHandler(filters.TEXT, handle_message)],  # Упрощён фильтр
+            REPORTS_MENU: [MessageHandler(filters.TEXT, handle_message)],
         },
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )

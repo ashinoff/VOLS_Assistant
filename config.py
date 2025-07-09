@@ -61,9 +61,3 @@ LABINSK_URL_RK_SP = os.getenv("LABINSK_URL_RK_SP")
 KRASNODAR_URL_RK_SP = os.getenv("KRASNODAR_URL_RK_SP")
 ARMAVIR_URL_RK_SP = os.getenv("ARMAVIR_URL_RK_SP")
 ADYGEYSK_URL_RK_SP = os.getenv("ADYGEYSK_URL_RK_SP")
-
-# SMTP settings for email reports
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
-SMTP_LOGIN = os.getenv("SMTP_LOGIN")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")

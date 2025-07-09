@@ -1,5 +1,8 @@
 import logging
 import pandas as pd
+import uvicorn
+from fastapi import FastAPI
+from threading import Thread
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -15,6 +18,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app for Render
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "Bot is running"}
 
 # Load user data from CSV on Google Drive
 def load_user_data():
@@ -126,10 +136,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
-def main():
-    # Start keep alive
-    keep_alive()
-
+def run_bot():
     # Initialize bot
     application = Application.builder().token(TOKEN).build()
 
@@ -138,8 +145,19 @@ def main():
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_error_handler(error_handler)
 
-    # Start the bot with specified port for Render
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, bind_addr="0.0.0.0", port=PORT)
+    # Start polling
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+def main():
+    # Start keep alive
+    keep_alive()
+
+    # Start bot in a separate thread
+    bot_thread = Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+
+    # Start FastAPI server for Render
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     main()

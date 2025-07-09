@@ -7,7 +7,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
-from config import BOT_TOKEN, ZONES_CSV_URL
+from config import TOKEN, ZONES_CSV_URL, PORT
 from keep_alive import keep_alive
 
 # Configure logging
@@ -131,15 +131,15 @@ def main():
     keep_alive()
 
     # Initialize bot
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(TOKEN).build()
 
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_error_handler(error_handler)
 
-    # Start the bot
-    application.run_polling()
+    # Start the bot with specified port for Render
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, bind_addr="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
     main()

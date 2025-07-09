@@ -160,49 +160,50 @@ def has_access(user_data, required_visibility):
 
 # Define main menu buttons with visibility
 MAIN_MENU = [
-    {"text": "Россети Кубань ⚡️", "visibility": "all"},
-    {"text": "Россети ЮГ ⚡️", "visibility": "all"},
-    {"text": "Выгрузить отчеты 📊", "visibility": "all"},
-    {"text": "Телефонный справочник 📞", "visibility": "all"},
-    {"text": "Справка 📚", "visibility": "all"},
-    {"text": "Руководство пользователя 📖", "visibility": "all"},
+    {"text": "⚡️ Россети ЮГ", "visibility": "all"},
+    {"text": "⚡️ Россети Кубань", "visibility": "all"},
+    {"text": "📊 Выгрузить отчеты", "visibility": "all"},
+    {"text": "📞 Телефонный справочник", "visibility": "all"},
+    {"text": "📖 Руководство пользователя", "visibility": "all"},
+    {"text": "📚 Справка", "visibility": "all"},
+    {"text": "⬅️ Назад", "visibility": "all"},
 ]
 
 # Define Rosseti Yug submenu with visibility
 ROSSETI_YUG_MENU = [
-    {"text": "Юго-Западные ЭС", "visibility": "yugo_zapad_yug"},
-    {"text": "Центральные ЭС", "visibility": "central_yug"},
-    {"text": "Западные ЭС", "visibility": "zapad_yug"},
-    {"text": "Восточные ЭС", "visibility": "vostoch_yug"},
-    {"text": "Южные ЭС", "visibility": "yuzh_yug"},
-    {"text": "Северо-Восточные ЭС", "visibility": "severo_vostoch_yug"},
-    {"text": "Юго-Восточные ЭС", "visibility": "yugo_vostoch_yug"},
-    {"text": "Северные ЭС", "visibility": "sever_yug"},
-    {"text": "Назад ⬅️", "visibility": "all"},
+    {"text": "⚡️ Юго-Западные ЭС", "visibility": "yugo_zapad_yug"},
+    {"text": "⚡️ Центральные ЭС", "visibility": "central_yug"},
+    {"text": "⚡️ Западные ЭС", "visibility": "zapad_yug"},
+    {"text": "⚡️ Восточные ЭС", "visibility": "vostoch_yug"},
+    {"text": "⚡️ Южные ЭС", "visibility": "yuzh_yug"},
+    {"text": "⚡️ Северо-Восточные ЭС", "visibility": "severo_vostoch_yug"},
+    {"text": "⚡️ Юго-Восточные ЭС", "visibility": "yugo_vostoch_yug"},
+    {"text": "⚡️ Северные ЭС", "visibility": "sever_yug"},
+    {"text": "⬅️ Назад", "visibility": "all"},
 ]
 
 # Define Rosseti Kuban submenu with visibility
 ROSSETI_KUBAN_MENU = [
-    {"text": "Юго-Западные ЭС", "visibility": "yugo_zapad_kuban"},
-    {"text": "Усть-Лабинские ЭС", "visibility": "ust_labinsk_kuban"},
-    {"text": "Тимашевские ЭС", "visibility": "timashevsk_kuban"},
-    {"text": "Тихорецкие ЭС", "visibility": "tikhoretsk_kuban"},
-    {"text": "Сочинские ЭС", "visibility": "sochi_kuban"},
-    {"text": "Славянские ЭС", "visibility": "slavyansk_kuban"},
-    {"text": "Ленинградские ЭС", "visibility": "leningradsk_kuban"},
-    {"text": "Лабинские ЭС", "visibility": "labinsk_kuban"},
-    {"text": "Краснодарские ЭС", "visibility": "krasnodar_kuban"},
-    {"text": "Армавирские ЭС", "visibility": "armavir_kuban"},
-    {"text": "Адыгейские ЭС", "visibility": "adygeysk_kuban"},
-    {"text": "Назад ⬅️", "visibility": "all"},
+    {"text": "⚡️ Юго-Западные ЭС", "visibility": "yugo_zapad_kuban"},
+    {"text": "⚡️ Усть-Лабинские ЭС", "visibility": "ust_labinsk_kuban"},
+    {"text": "⚡️ Тимашевские ЭС", "visibility": "timashevsk_kuban"},
+    {"text": "⚡️ Тихорецкие ЭС", "visibility": "tikhoretsk_kuban"},
+    {"text": "⚡️ Сочинские ЭС", "visibility": "sochi_kuban"},
+    {"text": "⚡️ Славянские ЭС", "visibility": "slavyansk_kuban"},
+    {"text": "⚡️ Ленинградские ЭС", "visibility": "leningradsk_kuban"},
+    {"text": "⚡️ Лабинские ЭС", "visibility": "labinsk_kuban"},
+    {"text": "⚡️ Краснодарские ЭС", "visibility": "krasnodar_kuban"},
+    {"text": "⚡️ Армавирские ЭС", "visibility": "armavir_kuban"},
+    {"text": "⚡️ Адыгейские ЭС", "visibility": "adygeysk_kuban"},
+    {"text": "⬅️ Назад", "visibility": "all"},
 ]
 
 # Define ES submenu with visibility
 ES_SUBMENU = [
-    {"text": "Поиск по ТП 🔍", "visibility": "all"},
-    {"text": "Отправить уведомление 🔔", "visibility": "all"},
-    {"text": "Справка 📚", "visibility": "all"},
-    {"text": "Назад ⬅️", "visibility": "all"},
+    {"text": "🔍 Поиск по ТП", "visibility": "all"},
+    {"text": "🔔 Отправить уведомление", "visibility": "all"},
+    {"text": "📚 Справка", "visibility": "all"},
+    {"text": "⬅️ Назад", "visibility": "all"},
 ]
 
 # Build main menu based on user visibility
@@ -228,13 +229,13 @@ def build_es_submenu(user_data):
 # Build TP selection keyboard
 def build_tp_selection_menu(tp_options):
     keyboard = [[tp] for tp in tp_options]
-    keyboard.append(["Отмена 🚫"])
+    keyboard.append(["⬅️ Назад"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Build VL selection keyboard
 def build_vl_selection_menu(vl_options):
     keyboard = [[vl] for vl in vl_options]
-    keyboard.append(["Отмена 🚫"])
+    keyboard.append(["⬅️ Назад"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # Fuzzy search for TP
@@ -289,35 +290,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Main menu actions
     if state == "MAIN_MENU":
-        if text == "Россети Кубань ⚡️" and has_access(user_data, "all"):
-            context.user_data["state"] = "ROSSETI_KUBAN"
-            context.user_data["previous_state"] = "MAIN_MENU"
-            context.user_data["is_rosseti_yug"] = False
-            await update.message.reply_text(
-                "Выберите ЭС:", reply_markup=build_rosseti_kuban_menu(user_data)
-            )
-        elif text == "Россети ЮГ ⚡️" and has_access(user_data, "all"):
+        if text == "⚡️ Россети ЮГ" and has_access(user_data, "all"):
             context.user_data["state"] = "ROSSETI_YUG"
             context.user_data["previous_state"] = "MAIN_MENU"
             context.user_data["is_rosseti_yug"] = True
             await update.message.reply_text(
                 "Выберите ЭС:", reply_markup=build_rosseti_yug_menu(user_data)
             )
-        elif text == "Выгрузить отчеты 📊" and has_access(user_data, "all"):
+        elif text == "⚡️ Россети Кубань" and has_access(user_data, "all"):
+            context.user_data["state"] = "ROSSETI_KUBAN"
+            context.user_data["previous_state"] = "MAIN_MENU"
+            context.user_data["is_rosseti_yug"] = False
+            await update.message.reply_text(
+                "Выберите ЭС:", reply_markup=build_rosseti_kuban_menu(user_data)
+            )
+        elif text == "📊 Выгрузить отчеты" and has_access(user_data, "all"):
             await update.message.reply_text("Выгрузка отчетов 📊. Функционал в разработке.")
-        elif text == "Телефонный справочник 📞" and has_access(user_data, "all"):
+        elif text == "📞 Телефонный справочник" and has_access(user_data, "all"):
             await update.message.reply_text("Телефонный справочник 📞. Функционал в разработке.")
-        elif text == "Справка 📚" and has_access(user_data, "all"):
-            await update.message.reply_text("Справка 📚. Функционал в разработке.")
-        elif text == "Руководство пользователя 📖" and has_access(user_data, "all"):
+        elif text == "📖 Руководство пользователя" and has_access(user_data, "all"):
             await update.message.reply_text("Руководство пользователя 📖. Функционал в разработке.")
+        elif text == "📚 Справка" and has_access(user_data, "all"):
+            await update.message.reply_text("Справка 📚. Функционал в разработке.")
+        elif text == "⬅️ Назад" and has_access(user_data, "all"):
+            await start(update, context)
         else:
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
 
     # Rosseti Yug submenu actions
     elif state == "ROSSETI_YUG":
-        if text == "Назад ⬅️" and has_access(user_data, "all"):
+        if text == "⬅️ Назад" and has_access(user_data, "all"):
             context.user_data["state"] = "MAIN_MENU"
             await update.message.reply_text(
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
@@ -326,10 +329,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for button in ROSSETI_YUG_MENU:
                 if text == button["text"] and has_access(user_data, button["visibility"]):
                     context.user_data["state"] = "ES_SUBMENU"
-                    context.user_data["selected_es"] = text
+                    context.user_data["selected_es"] = text.replace("⚡️ ", "")
                     context.user_data["previous_state"] = "ROSSETI_YUG"
                     await update.message.reply_text(
-                        f"Вы выбрали {text}. Выберите действие:", reply_markup=build_es_submenu(user_data)
+                        f"Вы выбрали {text.replace('⚡️ ', '')}. Выберите действие:", reply_markup=build_es_submenu(user_data)
                     )
                     return ConversationHandler.END
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
@@ -337,7 +340,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Rosseti Kuban submenu actions
     elif state == "ROSSETI_KUBAN":
-        if text == "Назад ⬅️" and has_access(user_data, "all"):
+        if text == "⬅️ Назад" and has_access(user_data, "all"):
             context.user_data["state"] = "MAIN_MENU"
             await update.message.reply_text(
                 "Выберите действие:", reply_markup=build_main_menu(user_data)
@@ -346,10 +349,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for button in ROSSETI_KUBAN_MENU:
                 if text == button["text"] and has_access(user_data, button["visibility"]):
                     context.user_data["state"] = "ES_SUBMENU"
-                    context.user_data["selected_es"] = text
+                    context.user_data["selected_es"] = text.replace("⚡️ ", "")
                     context.user_data["previous_state"] = "ROSSETI_KUBAN"
                     await update.message.reply_text(
-                        f"Вы выбрали {text}. Выберите действие:", reply_markup=build_es_submenu(user_data)
+                        f"Вы выбрали {text.replace('⚡️ ', '')}. Выберите действие:", reply_markup=build_es_submenu(user_data)
                     )
                     return ConversationHandler.END
             await update.message.reply_text("Пожалуйста, выберите ЭС из меню.")
@@ -358,19 +361,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ES submenu actions
     elif state == "ES_SUBMENU":
         selected_es = context.user_data.get("selected_es", "")
-        if text == "Поиск по ТП 🔍" and has_access(user_data, "all"):
+        if text == "🔍 Поиск по ТП" and has_access(user_data, "all"):
             await update.message.reply_text(
                 f"Введите наименование ТП для поиска в {selected_es}:", reply_markup=ReplyKeyboardRemove()
             )
             return SEARCH_TP
-        elif text == "Отправить уведомление 🔔" and has_access(user_data, "all"):
+        elif text == "🔔 Отправить уведомление" and has_access(user_data, "all"):
             await update.message.reply_text(
                 f"Введите наименование ТП для уведомления в {selected_es}:", reply_markup=ReplyKeyboardRemove()
             )
             return NOTIFY_TP
-        elif text == "Справка 📚" and has_access(user_data, "all"):
+        elif text == "📚 Справка" and has_access(user_data, "all"):
             await update.message.reply_text(f"Справка 📚. Функционал в разработке.")
-        elif text == "Назад ⬅️" and has_access(user_data, "all"):
+        elif text == "⬅️ Назад" and has_access(user_data, "all"):
             previous_state = context.user_data.get("previous_state", "MAIN_MENU")
             context.user_data["state"] = previous_state
             if previous_state == "ROSSETI_YUG":
@@ -452,7 +455,7 @@ async def select_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_data(selected_es, is_rosseti_yug)
 
-    if text == "Отмена 🚫":
+    if text == "⬅️ Назад":
         context.user_data["state"] = "ES_SUBMENU"
         await update.message.reply_text(
             f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
@@ -543,17 +546,17 @@ async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected_es = context.user_data.get("selected_es", "")
     vl_options = context.user_data.get("vl_options", [])
 
-    if text == "Отмена 🚫":
-        context.user_data["state"] = "ES_SUBMENU"
+    if text == "⬅️ Назад":
         await update.message.reply_text(
-            f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
+            f"Введите наименование ТП для уведомления в {selected_es}:", reply_markup=ReplyKeyboardRemove()
         )
-        return ConversationHandler.END
+        return NOTIFY_TP
 
     if text in vl_options:
         context.user_data["selected_vl"] = text
+        location_button = [[{"text": "📍 Отправить местоположение", "request_location": True}]]
         await update.message.reply_text(
-            "Введите геоданные (например, 45.123, 38.456):", reply_markup=ReplyKeyboardRemove()
+            "Отправьте ваше местоположение:", reply_markup=ReplyKeyboardMarkup(location_button, resize_keyboard=True)
         )
         return NOTIFY_GEO
 
@@ -588,7 +591,15 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    geo_data = update.message.text
+    if not update.message.location:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте местоположение.", reply_markup=ReplyKeyboardRemove()
+        )
+        return NOTIFY_GEO
+
+    latitude = update.message.location.latitude
+    longitude = update.message.location.longitude
+    geo_data = f"{latitude}, {longitude}"
     selected_es = context.user_data.get("selected_es", "")
     selected_tp = context.user_data.get("selected_tp", "")
     selected_vl = context.user_data.get("selected_vl", "")
@@ -694,7 +705,7 @@ def main():
             SELECT_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_tp)],
             NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
             NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
-            NOTIFY_GEO: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_geo)],
+            NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
         },
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )

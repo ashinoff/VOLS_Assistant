@@ -13,7 +13,6 @@ from email.mime.text import MIMEText
 from email import encoders
 import os
 from fastapi import FastAPI, Request, HTTPException
-from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -623,8 +622,7 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected_es = context.user_data.get("selected_es", "")
         context.user_data["state"] = "ES_SUBMENU"
         await update.message.reply_text(
-            f"Выберите действие для {selected_es}:", 
-            reply_markup=build_es_submenu(user_data)
+            f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
         )
         return ConversationHandler.END
 
@@ -905,6 +903,7 @@ async def root():
     return {"message": "Bot is running"}
 
 # Lifespan event handler for startup and shutdown
+from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     init_db()
@@ -920,6 +919,7 @@ async def lifespan(app):
 app.lifespan = lifespan
 
 def main():
+    # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
@@ -934,10 +934,12 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )
 
+    # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(conv_handler)
     application.add_error_handler(error_handler)
 
+    # Start FastAPI server
     uvicorn.run(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":

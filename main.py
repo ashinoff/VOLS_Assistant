@@ -51,7 +51,13 @@ app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
 # States for ConversationHandler
-SEARCH_TP, SELECT_TP, NOTIFY_TP, NOTIFY_VL, NOTIFY_GEO, REPORTS_MENU, EXPORT_SUBMENU = range(7)
+SEARCH_TP = 0
+SELECT_TP = 1
+NOTIFY_TP = 2
+NOTIFY_VL = 3
+NOTIFY_GEO = 4
+REPORTS_MENU = 5
+EXPORT_SUBMENU = 6
 
 # SQLite database setup
 def init_db():

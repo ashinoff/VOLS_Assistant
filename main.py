@@ -4,6 +4,14 @@ import uvicorn
 import asyncio
 import re
 import requests
+import sqlite3
+import datetime
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
+import os
 from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
@@ -25,7 +33,8 @@ from config import (
     YUZH_URL_UG_SP, SEVERO_VOSTOCH_URL_UG_SP, YUGO_VOSTOCH_URL_UG_SP, SEVER_URL_UG_SP,
     YUGO_ZAPAD_URL_RK_SP, UST_LABINSK_URL_RK_SP, TIMASHEVSK_URL_RK_SP, TIKHORETSK_URL_RK_SP,
     SOCHI_URL_RK_SP, SLAVYANSK_URL_RK_SP, LENINGRADSK_URL_RK_SP, LABINSK_URL_RK_SP,
-    KRASNODAR_URL_RK_SP, ARMAVIR_URL_RK_SP, ADYGEYSK_URL_RK_SP
+    KRASNODAR_URL_RK_SP, ARMAVIR_URL_RK_SP, ADYGEYSK_URL_RK_SP,
+    SMTP_SERVER, SMTP_PORT, SMTP_LOGIN, SMTP_PASSWORD
 )
 
 # Configure logging
@@ -41,7 +50,42 @@ app = FastAPI()
 application = Application.builder().token(TOKEN).build()
 
 # States for ConversationHandler
-SEARCH_TP, SELECT_TP, NOTIFY_TP, NOTIFY_VL, NOTIFY_GEO = range(5)
+SEARCH_TP, SELECT_TP, NOTIFY_TP, NOTIFY_VL, NOTIFY_GEO, REPORTS_MENU, EXPORT_SUBMENU = range(7)
+
+# SQLite database setup
+def init_db():
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+    # Table for Rosseti Yug notifications
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_yug (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch TEXT,
+            res TEXT,
+            sender_fio TEXT,
+            sender_id TEXT,
+            receiver_fio TEXT,
+            receiver_id TEXT,
+            timestamp TEXT,
+            coordinates TEXT
+        )
+    """)
+    # Table for Rosseti Kuban notifications
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_kuban (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            branch TEXT,
+            res TEXT,
+            sender_fio TEXT,
+            sender_id TEXT,
+            receiver_fio TEXT,
+            receiver_id TEXT,
+            timestamp TEXT,
+            coordinates TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 # Mapping of ES names to their URLs for TP search
 ES_URL_MAPPING = {
@@ -101,6 +145,7 @@ def load_user_data():
                 "RES": row["РЭС"],
                 "FIO": row["ФИО"],
                 "Responsible": row["Ответственный"],
+                "Email": row.get("Email", ""),
             }
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных пользователей: {e}")
@@ -206,6 +251,20 @@ ES_SUBMENU = [
     {"text": "⬅️ Назад", "visibility": "all"},
 ]
 
+# Define Reports submenu
+REPORTS_MENU = [
+    {"text": "📤 Выгрузка уведомлений Россети ЮГ", "visibility": "all"},
+    {"text": "📤 Выгрузка уведомлений Россети Кубань", "visibility": "all"},
+    {"text": "⬅️ Назад", "visibility": "all"},
+]
+
+# Define Export submenu
+EXPORT_SUBMENU = [
+    {"text": "🤖 Выгрузить в бот", "visibility": "all"},
+    {"text": "📧 Отправить себе на почту", "visibility": "all"},
+    {"text": "⬅️ Назад", "visibility": "all"},
+]
+
 # Build main menu based on user visibility
 def build_main_menu(user_data):
     keyboard = [[button["text"]] for button in MAIN_MENU if has_access(user_data, button["visibility"])]
@@ -224,6 +283,16 @@ def build_rosseti_kuban_menu(user_data):
 # Build ES submenu based on user visibility
 def build_es_submenu(user_data):
     keyboard = [[button["text"]] for button in ES_SUBMENU if has_access(user_data, button["visibility"])]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
+
+# Build Reports submenu
+def build_reports_menu(user_data):
+    keyboard = [[button["text"]] for button in REPORTS_MENU if has_access(user_data, button["visibility"])]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
+
+# Build Export submenu
+def build_export_submenu(user_data):
+    keyboard = [[button["text"]] for button in EXPORT_SUBMENU if has_access(user_data, button["visibility"])]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True) if keyboard else ReplyKeyboardRemove()
 
 # Build TP selection keyboard
@@ -305,7 +374,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Выберите ЭС:", reply_markup=build_rosseti_kuban_menu(user_data)
             )
         elif text == "📊 Выгрузить отчеты" and has_access(user_data, "all"):
-            await update.message.reply_text("Выгрузка отчетов 📊. Функционал в разработке.")
+            context.user_data["state"] = "REPORTS_MENU"
+            context.user_data["previous_state"] = "MAIN_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
         elif text == "📞 Телефонный справочник" and has_access(user_data, "all"):
             await update.message.reply_text("Телефонный справочник 📞. Функционал в разработке.")
         elif text == "📖 Руководство пользователя" and has_access(user_data, "all"):
@@ -384,6 +457,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 context.user_data["state"] = "MAIN_MENU"
                 await update.message.reply_text("Выберите действие:", reply_markup=build_main_menu(user_data))
+        else:
+            await update.message.reply_text("Пожалуйста, выберите действие из меню.")
+        return ConversationHandler.END
+
+    # Reports submenu actions
+    elif state == "REPORTS_MENU":
+        if text == "📤 Выгрузка уведомлений Россети ЮГ" and has_access(user_data, "all"):
+            context.user_data["state"] = "EXPORT_SUBMENU"
+            context.user_data["export_type"] = "yug"
+            await update.message.reply_text(
+                "Выберите действие для выгрузки уведомлений Россети ЮГ:", reply_markup=build_export_submenu(user_data)
+            )
+        elif text == "📤 Выгрузка уведомлений Россети Кубань" and has_access(user_data, "all"):
+            context.user_data["state"] = "EXPORT_SUBMENU"
+            context.user_data["export_type"] = "kuban"
+            await update.message.reply_text(
+                "Выберите действие для выгрузки уведомлений Россети Кубань:", reply_markup=build_export_submenu(user_data)
+            )
+        elif text == "⬅️ Назад" and has_access(user_data, "all"):
+            context.user_data["state"] = "MAIN_MENU"
+            await update.message.reply_text(
+                "Выберите действие:", reply_markup=build_main_menu(user_data)
+            )
+        else:
+            await update.message.reply_text("Пожалуйста, выберите действие из меню.")
+        return ConversationHandler.END
+
+    # Export submenu actions
+    elif state == "EXPORT_SUBMENU":
+        export_type = context.user_data.get("export_type", "")
+        if text == "🤖 Выгрузить в бот" and has_access(user_data, "all"):
+            await export_to_bot(update, context, export_type)
+            context.user_data["state"] = "REPORTS_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
+        elif text == "📧 Отправить себе на почту" and has_access(user_data, "all"):
+            await export_to_email(update, context, export_type, user_data)
+            context.user_data["state"] = "REPORTS_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
+        elif text == "⬅️ Назад" and has_access(user_data, "all"):
+            context.user_data["state"] = "REPORTS_MENU"
+            await update.message.reply_text(
+                "Выберите отчет:", reply_markup=build_reports_menu(user_data)
+            )
         else:
             await update.message.reply_text("Пожалуйста, выберите действие из меню.")
         return ConversationHandler.END
@@ -639,6 +759,22 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "ES_SUBMENU"
         return ConversationHandler.END
 
+    # Log notification to SQLite
+    conn = sqlite3.connect("notifications.db")
+    cursor = conn.cursor()
+    table = "notifications_yug" if is_rosseti_yug else "notifications_kuban"
+    branch = "Россети ЮГ" if is_rosseti_yug else "Россети Кубань"
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute(
+        f"""
+        INSERT INTO {table} (branch, res, sender_fio, sender_id, receiver_fio, receiver_id, timestamp, coordinates)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (branch, res, user_data["FIO"], user_id, responsible_fio, responsible_id, timestamp, geo_data)
+    )
+    conn.commit()
+    conn.close()
+
     # Send notification to responsible
     sender_fio = user_data["FIO"]
     notification = f"⚠️ Уведомление! Найден бездоговорной ВОЛС! {sender_fio}, {selected_tp}, {selected_vl}. Геоданные."
@@ -651,6 +787,75 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data["state"] = "ES_SUBMENU"
     return ConversationHandler.END
+
+# Export to bot
+async def export_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str):
+    table = "notifications_yug" if export_type == "yug" else "notifications_kuban"
+    filename = f"report_{export_type}.xlsx"
+    
+    try:
+        conn = sqlite3.connect("notifications.db")
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        conn.close()
+
+        if df.empty:
+            await update.message.reply_text("Нет данных для выгрузки.")
+            return
+
+        df.to_excel(filename, index=False)
+        with open(filename, "rb") as f:
+            await update.message.reply_document(document=f, filename=filename)
+        os.remove(filename)
+        await update.message.reply_text("Отчет успешно выгружен в бот!")
+    except Exception as e:
+        logger.error(f"Ошибка при выгрузке отчета: {e}")
+        await update.message.reply_text("Ошибка при выгрузке отчета. Попробуйте позже.")
+
+# Export to email
+async def export_to_email(update: Update, context: ContextTypes.DEFAULT_TYPE, export_type: str, user_data: dict):
+    user_id = str(update.effective_user.id)
+    email = user_data.get("Email", "")
+    if not email:
+        await update.message.reply_text("У вас не указан адрес электронной почты в системе.")
+        return
+
+    table = "notifications_yug" if export_type == "yug" else "notifications_kuban"
+    filename = f"report_{export_type}.xlsx"
+    
+    try:
+        conn = sqlite3.connect("notifications.db")
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+        conn.close()
+
+        if df.empty:
+            await update.message.reply_text("Нет данных для выгрузки.")
+            return
+
+        df.to_excel(filename, index=False)
+
+        msg = MIMEMultipart()
+        msg["From"] = SMTP_LOGIN
+        msg["To"] = email
+        msg["Subject"] = f"Отчет по уведомлениям {'Россети ЮГ' if export_type == 'yug' else 'Россети Кубань'}"
+        body = "В прикрепленном файле находится отчет по уведомлениям."
+        msg.attach(MIMEText(body, "plain"))
+
+        with open(filename, "rb") as f:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename={filename}")
+        msg.attach(part)
+
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+            server.login(SMTP_LOGIN, SMTP_PASSWORD)
+            server.sendmail(SMTP_LOGIN, email, msg.as_string())
+
+        os.remove(filename)
+        await update.message.reply_text(f"Отчет успешно отправлен на почту {email}!")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке отчета на почту: {e}")
+        await update.message.reply_text("Ошибка при отправке отчета на почту. Попробуйте позже.")
 
 # Send TP results
 async def send_tp_results(update: Update, context: ContextTypes.DEFAULT_TYPE, df, selected_es, tp_name):
@@ -700,6 +905,7 @@ async def root():
 # FastAPI startup event to set webhook
 @app.on_event("startup")
 async def on_startup():
+    init_db()  # Initialize SQLite database
     webhook_url = f"{SELF_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
@@ -711,7 +917,7 @@ async def on_shutdown():
     await application.stop()
 
 def main():
-    # Conversation handler for TP search and notifications
+    # Conversation handler for TP search, notifications, and reports
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
@@ -720,6 +926,8 @@ def main():
             NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
             NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
             NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
+            REPORTS_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
+            EXPORT_SUBMENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         },
         fallbacks=[CommandHandler("cancel", cancel_action)],
     )

@@ -2,6 +2,5 @@ python-telegram-bot==21.6
 fastapi>=0.100.0
 uvicorn
 pandas
-openpyxl
 requests
 python-dotenv>=1.0.0

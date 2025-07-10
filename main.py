@@ -16,7 +16,7 @@ from telegram.ext import (
 from config import *
 from zones import load_zones_cached
 
-# Logging setup
+# Logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,32 +24,24 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 application: Application
 
-# Conversation states
-(
-    STATE_MAIN,
-    STATE_BRANCH_MENU,
-    STATE_ACTION_MENU,
-    STATE_SEARCH_TP,
-    STATE_NOTIFY,
-    STATE_VARIANT,
-) = range(6)
+# States
+d(
+    CH_NET, CH_BR, CH_ACT, IN_TP, VAR_SEL
+) = range(5)
 
 # Menus
 MAIN_MENU = [[KeyboardButton("⚡️ Россети ЮГ")], [KeyboardButton("⚡️ Россети Кубань")]]
-UG_MENU = [[KeyboardButton(b)] for b in [
-    "Юго-Западные ЭС", "Центральные ЭС", "Западные ЭС", "Восточные ЭС",
-    "Южные ЭС", "Северо-Восточные ЭС", "Юго-Восточные ЭС", "Северные ЭС"
-]] + [[KeyboardButton("⬅️ Назад")]]
-RK_MENU = [[KeyboardButton(b)] for b in [
-    "Юго-Западные ЭС", "Усть-Лабинские ЭС", "Тимашевские ЭС", "Тихорецкие ЭС",
-    "Сочинские ЭС", "Славянские ЭС", "Ленинградские ЭС", "Лабинские ЭС",
-    "Краснодарские ЭС", "Армавирские ЭС", "Адыгейские ЭС"
-]] + [[KeyboardButton("⬅️ Назад")]]
+UG_MENU = [[KeyboardButton(v)] for v in [
+    "Юго-Западные ЭС","Центральные ЭС","Западные ЭС","Восточные ЭС",
+    "Южные ЭС","Северо-Восточные ЭС","Юго-Восточные ЭС","Северные ЭС"]] + [[KeyboardButton("⬅️ Назад")]]
+RK_MENU = [[KeyboardButton(v)] for v in [
+    "Юго-Западные ЭС","Усть-Лабинские ЭС","Тимашевские ЭС","Тихорецкие ЭС",
+    "Сочинские ЭС","Славянские ЭС","Ленинградские ЭС","Лабинские ЭС",
+    "Краснодарские ЭС","Армавирские ЭС","Адыгейские ЭС"]] + [[KeyboardButton("⬅️ Назад")]]
 ACTION_MENU = [[KeyboardButton("🔍 Поиск ТП")], [KeyboardButton("📨 Отправить Уведомление")],
                [KeyboardButton("⬅️ Назад")], [KeyboardButton("ℹ️ Справка")]]
 
-# URL map for regions
-URL_MAP: Dict[str, Dict[str, tuple]] = {
+URL_MAP = {
     "ЮГ": {
         "Юго-Западные ЭС": (YUGO_ZAPAD_URL_UG, YUGO_ZAPAD_URL_UG_SP),
         "Центральные ЭС": (CENTRAL_URL_UG, CENTRAL_URL_UG_SP),
@@ -75,13 +67,10 @@ URL_MAP: Dict[str, Dict[str, tuple]] = {
     }
 }
 
-# CSV cache
-_csv_cache: Dict[str, pd.DataFrame] = {}
-async def fetch_csv(url: str) -> pd.DataFrame:
-    if not url:
-        return pd.DataFrame()
-    if url in _csv_cache:
-        return _csv_cache[url]
+_csv_cache = {}
+async def fetch_csv(url):
+    if not url: return pd.DataFrame()
+    if url in _csv_cache: return _csv_cache[url]
     resp = await app.state.http.get(url, follow_redirects=True)
     resp.raise_for_status()
     df = pd.read_csv(io.StringIO(resp.text))
@@ -89,124 +78,106 @@ async def fetch_csv(url: str) -> pd.DataFrame:
     return df
 
 @lru_cache(maxsize=1)
-def load_users() -> Dict[str, Any]:
-    df = pd.read_csv(ZONES_CSV_URL)
-    return {str(r['Telegram ID']): r for _, r in df.iterrows()}
+def load_users():
+    return {str(r['Telegram ID']): r for _,r in pd.read_csv(ZONES_CSV_URL).iterrows()}
 
-# Show search results for exact match
-async def show_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE, tp_name: str, df: pd.DataFrame) -> int:
-    filtered = df[df['Наименование ТП'] == tp_name]
-    count = len(filtered)
-    await update.message.reply_text(f"На {tp_name} найдено {count} договоров ВОЛС.")
-    for _, row in filtered.iterrows():
+async def show_results(update, ctx, tp, df):
+    filt = df[df['Наименование ТП']==tp]
+    await update.message.reply_text(f"На {tp} найдено {len(filt)} договоров ВОЛС.")
+    for _,r in filt.iterrows():
         await update.message.reply_text(
-            f"📡 {row.get('Наименование ВЛ','')}\n"
-            f"Опоры: {row.get('Опоры','')} ({row.get('Количество опор','')})\n"
-            f"Провайдер: {row.get('Наименование Провайдера','')}"
+            f"📡 {r['Наименование ВЛ']}\nОпоры: {r['Опоры']} ({r['Количество опор']})\nПровайдер: {r['Наименование Провайдера']}"
         )
-    # Return to action menu
-    await update.message.reply_text("Действия:", reply_markup=ReplyKeyboardMarkup(ACTION_MENU, resize_keyboard=True))
-    return STATE_ACTION_MENU
+    await update.message.reply_text('Действия:', reply_markup=ReplyKeyboardMarkup(ACTION_MENU, resize_keyboard=True))
+    return CH_ACT
 
-# Handle variant selection
-async def variant_selection(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    choice = update.message.text
-    if choice == '⬅️ Назад':
-        return await select_branch(update, ctx)
-    variants = ctx.user_data.get('variants', [])
-    if choice not in variants:
-        await update.message.reply_text("Неизвестный вариант. Попробуйте ещё раз или нажмите Назад.")
-        return STATE_VARIANT
-    full_url, _ = ctx.user_data['urls']
-    df = await fetch_csv(full_url)
-    return await show_results(update, ctx, choice, df)
+async def variant_selection(update, ctx):
+    txt = update.message.text
+    if txt=='⬅️ Назад': return await select_branch(update, ctx)
+    opts = ctx.user_data['variants']
+    if txt not in opts:
+        await update.message.reply_text('Неизвестный вариант.')
+        return VAR_SEL
+    df = await fetch_csv(ctx.user_data['urls'][0])
+    return await show_results(update, ctx, txt, df)
 
-# Search TP with normalization and variants
-async def search_tp(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+async def search_tp(update, ctx):
     term = update.message.text or ''
-    norm = term.lower().replace(' ', '').replace('-', '')
-    full_url, _ = ctx.user_data.get('urls', (None, None))
-    df = await fetch_csv(full_url)
-    if df.empty or 'Наименование ТП' not in df.columns:
-        await update.message.reply_text('Ошибка загрузки данных ТП.')
-        return STATE_ACTION_MENU
-    df['__norm'] = df['Наименование ТП'].str.lower().str.replace(' ', '').str.replace('-', '')
-    matches = df[df['__norm'].str.contains(norm, na=False)]
-    if matches.empty:
+    norm = term.lower().replace(' ','').replace('-','')
+    full,sp = ctx.user_data['urls']
+    df = await fetch_csv(full)
+    df['__n']=df['Наименование ТП'].str.lower().str.replace(' ','').str.replace('-','')
+    m=df[df['__n'].str.contains(norm,na=False)]
+    if m.empty:
         await update.message.reply_text(f"ТП '{term}' не найдено.")
-        return STATE_ACTION_MENU
-    tps = matches['Наименование ТП'].drop_duplicates().tolist()
-    if len(tps) == 1:
-        return await show_results(update, ctx, tps[0], matches)
-    opts = tps[:10]
-    ctx.user_data['variants'] = opts
-    kb = ReplyKeyboardMarkup([[KeyboardButton(o)] for o in opts] + [[KeyboardButton('⬅️ Назад')]], resize_keyboard=True)
-    await update.message.reply_text('Найдены варианты ТП, выберите один:', reply_markup=kb)
-    return STATE_VARIANT
+        return CH_ACT
+    tps = m['Наименование ТП'].drop_duplicates().tolist()
+    if len(tps)==1:
+        return await show_results(update, ctx, tps[0], m)
+    opts=tps[:10]
+    ctx.user_data['variants']=opts
+    kb=[[KeyboardButton(o)] for o in opts]+[[KeyboardButton('⬅️ Назад')]]
+    await update.message.reply_text('Варианты:',reply_markup=ReplyKeyboardMarkup(kb,resize_keyboard=True))
+    return VAR_SEL
 
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = str(update.effective_user.id)
-    users = load_users()
-    if user_id not in users:
+async def start(update, ctx):
+    uid=str(update.effective_user.id)
+    if uid not in load_users():
         await update.message.reply_text('Нет доступа.')
         return ConversationHandler.END
-    await update.message.reply_text('Выберите сеть:', reply_markup=ReplyKeyboardMarkup(MAIN_MENU, resize_keyboard=True))
-    return STATE_BRANCH_MENU
+    await update.message.reply_text('Выберите сеть:',reply_markup=ReplyKeyboardMarkup(MAIN_MENU,resize_keyboard=True))
+    return CH_NET
 
-async def select_network(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    net = update.message.text.split()[-1]
-    if net not in URL_MAP:
-        return await start(update, ctx)
-    ctx.user_data['network'] = net
-    menu = UG_MENU if net == 'ЮГ' else RK_MENU
-    await update.message.reply_text(f"{net}: выберите филиал:", reply_markup=ReplyKeyboardMarkup(menu, resize_keyboard=True))
-    return STATE_ACTION_MENU
+async def select_network(update, ctx):
+    net=update.message.text.replace('⚡️ ','')
+    if net not in URL_MAP: return await start(update,ctx)
+    ctx.user_data['network']=net
+    menu=UG_MENU if net=='ЮГ' else RK_MENU
+    await update.message.reply_text(f'{net}: выберите филиал:',reply_markup=ReplyKeyboardMarkup(menu,resize_keyboard=True))
+    return CH_BR
 
-async def select_branch(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text
-    if text == '⬅️ Назад':
-        return await start(update, ctx)
-    ctx.user_data['branch'] = text
-    net = ctx.user_data['network']
-    full_url, sp_url = URL_MAP[net][text]
-    ctx.user_data['urls'] = (full_url, sp_url)
-    await update.message.reply_text(f"Филиал {text}: выберите действие:", reply_markup=ReplyKeyboardMarkup(ACTION_MENU, resize_keyboard=True))
-    return STATE_SEARCH_TP
+async def select_branch(update, ctx):
+    b=update.message.text
+    if b=='⬅️ Назад': return await start(update,ctx)
+    net=ctx.user_data['network']
+    if b not in URL_MAP[net]: return await select_network(update,ctx)
+    ctx.user_data['urls']=URL_MAP[net][b]
+    await update.message.reply_text(f'Филиал {b}:', reply_markup=ReplyKeyboardMarkup(ACTION_MENU,resize_keyboard=True))
+    return CH_ACT
 
-async def branch_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    action = update.message.text
-    if action == '⬅️ Назад':
-        return await select_network(update, ctx)
-    if action == 'ℹ️ Справка':
-        await update.message.reply_text('Здесь будет справка по работе бота.')
-        return STATE_SEARCH_TP
-    if action == '🔍 Поиск ТП':
-        await update.message.reply_text('Введите название ТП:')
-        return STATE_NOTIFY
-    if action == '📨 Отправить Уведомление':
-        await update.message.reply_text('Функция отправки уведомления пока не реализована.')
-        return STATE_SEARCH_TP
-    await update.message.reply_text('Не понял действие.')
-    return STATE_SEARCH_TP
+async def branch_action(update, ctx):
+    act=update.message.text
+    if act=='⬅️ Назад': return await select_network(update,ctx)
+    if act=='ℹ️ Справка':
+        await update.message.reply_text('Справка...')
+        return CH_ACT
+    if act=='🔍 Поиск ТП':
+        await update.message.reply_text('Введите ТП:')
+        return IN_TP
+    if act=='📨 Отправить Уведомление':
+        await update.message.reply_text('Отправка...')
+        return CH_ACT
+    await update.message.reply_text('Не понял')
+    return CH_ACT
 
-async def error_handler(update: Any, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error('Handler error: %s', ctx.error)
+async def error_handler(update,ctx):
+    logger.error(ctx.error)
 
 @app.on_event('startup')
-async def on_startup() -> None:
-    app.state.http = httpx.AsyncClient()
+async def on_startup():
+    app.state.http=httpx.AsyncClient()
     global application
-    application = Application.builder().token(TOKEN).build()
-    conv = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+    application=Application.builder().token(token).build()
+    conv=ConversationHandler(
+        entry_points=[CommandHandler('start',start)],
         states={
-            STATE_BRANCH_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_network)],
-            STATE_ACTION_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_branch)],
-            STATE_SEARCH_TP:   [MessageHandler(filters.TEXT & ~filters.COMMAND, branch_action)],
-            STATE_NOTIFY:      [MessageHandler(filters.TEXT & ~filters.COMMAND, search_tp)],
-            STATE_VARIANT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, variant_selection)],
+            CH_NET:[MessageHandler(filters.TEXT&~filters.COMMAND,select_network)],
+            CH_BR:[MessageHandler(filters.TEXT&~filters.COMMAND,select_branch)],
+            CH_ACT:[MessageHandler(filters.TEXT&~filters.COMMAND,branch_action)],
+            IN_TP:[MessageHandler(filters.TEXT&~filters.COMMAND,search_tp)],
+            VAR_SEL:[MessageHandler(filters.TEXT&~filters.COMMAND,variant_selection)],
         },
-        fallbacks=[CommandHandler('cancel', start)],
+        fallbacks=[CommandHandler('cancel',start)],
     )
     application.add_handler(conv)
     application.add_error_handler(error_handler)
@@ -214,15 +185,15 @@ async def on_startup() -> None:
     await application.bot.set_webhook(f"{SELF_URL}/webhook")
 
 @app.post('/webhook')
-async def webhook(request: Request) -> Dict[str, str]:
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {'status': 'ok'}
+async def webhook(request:Request):
+    upd=Update.de_json(await request.json(),application.bot)
+    await application.process_update(upd)
+    return {'status':'ok'}
 
 @app.on_event('shutdown')
-async def on_shutdown() -> None:
+async def on_shutdown():
     await application.stop()
     await app.state.http.aclose()
 
-if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=PORT)
+if __name__=='__main__':
+    uvicorn.run(app,host='0.0.0.0',port=PORT)

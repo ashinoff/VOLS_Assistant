@@ -1,8 +1,6 @@
 import logging
 import io
 from functools import lru_cache
-from typing import Any, Dict, List
-
 import pandas as pd
 import httpx
 import uvicorn
@@ -12,11 +10,8 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters
 )
-
 from config import *
-from zones import load_zones_cached
 
-# Logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,11 +19,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 application: Application
 
-# States
-# Conversation states: choose network, branch, action, input TP, select variant
 (CH_NET, CH_BR, CH_ACT, IN_TP, VAR_SEL) = range(5)
 
-# Menus
 MAIN_MENU = [[KeyboardButton("⚡️ Россети ЮГ")], [KeyboardButton("⚡️ Россети Кубань")]]
 UG_MENU = [[KeyboardButton(v)] for v in [
     "Юго-Западные ЭС","Центральные ЭС","Западные ЭС","Восточные ЭС",
@@ -39,6 +31,11 @@ RK_MENU = [[KeyboardButton(v)] for v in [
     "Краснодарские ЭС","Армавирские ЭС","Адыгейские ЭС"]] + [[KeyboardButton("⬅️ Назад")]]
 ACTION_MENU = [[KeyboardButton("🔍 Поиск ТП")], [KeyboardButton("📨 Отправить Уведомление")],
                [KeyboardButton("⬅️ Назад")], [KeyboardButton("ℹ️ Справка")]]
+SPARK_MENU = [
+    [KeyboardButton("📊 Уведомления о бездоговорных ВОЛС ЮГ")],
+    [KeyboardButton("📊 Уведомления о бездоговорных ВОЛС Кубань")],
+    [KeyboardButton("⬅️ Назад")]
+]
 
 URL_MAP = {
     "ЮГ": {
@@ -93,7 +90,7 @@ async def show_results(update, ctx, tp, df):
 async def variant_selection(update, ctx):
     txt = update.message.text
     if txt=='⬅️ Назад': return await select_branch(update, ctx)
-    opts = ctx.user_data['variants']
+    opts = ctx.user_data.get('variants', [])
     if txt not in opts:
         await update.message.reply_text('Неизвестный вариант.')
         return VAR_SEL
@@ -146,10 +143,29 @@ async def select_branch(update, ctx):
 
 async def branch_action(update, ctx):
     act=update.message.text
-    if act=='⬅️ Назад': return await select_network(update,ctx)
+    # Справка
     if act=='ℹ️ Справка':
-        await update.message.reply_text('Справка...')
+        await update.message.reply_text('Справка и выгрузки:', reply_markup=ReplyKeyboardMarkup(SPARK_MENU, resize_keyboard=True))
         return CH_ACT
+    # Кнопки выгрузки логов
+    if act == "📊 Уведомления о бездоговорных ВОЛС ЮГ":
+        df = pd.read_csv(NOTIFY_LOG_FILE_UG)
+        bio = io.BytesIO()
+        with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="UG")
+        bio.seek(0)
+        await update.message.reply_document(bio, filename="log_ug.xlsx")
+        return CH_ACT
+    if act == "📊 Уведомления о бездоговорных ВОЛС Кубань":
+        df = pd.read_csv(NOTIFY_LOG_FILE_RK)
+        bio = io.BytesIO()
+        with pd.ExcelWriter(bio, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="RK")
+        bio.seek(0)
+        await update.message.reply_document(bio, filename="log_rk.xlsx")
+        return CH_ACT
+    if act=='⬅️ Назад':
+        return await select_network(update,ctx)
     if act=='🔍 Поиск ТП':
         await update.message.reply_text('Введите ТП:')
         return IN_TP
@@ -166,7 +182,7 @@ async def error_handler(update,ctx):
 async def on_startup():
     app.state.http=httpx.AsyncClient()
     global application
-    application=Application.builder().token(token).build()
+    application=Application.builder().token(TOKEN).build()
     conv=ConversationHandler(
         entry_points=[CommandHandler('start',start)],
         states={

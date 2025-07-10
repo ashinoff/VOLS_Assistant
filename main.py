@@ -25,9 +25,8 @@ app = FastAPI()
 application: Application
 
 # States
-d(
-    CH_NET, CH_BR, CH_ACT, IN_TP, VAR_SEL
-) = range(5)
+# Conversation states: choose network, branch, action, input TP, select variant
+(CH_NET, CH_BR, CH_ACT, IN_TP, VAR_SEL) = range(5)
 
 # Menus
 MAIN_MENU = [[KeyboardButton("⚡️ Россети ЮГ")], [KeyboardButton("⚡️ Россети Кубань")]]

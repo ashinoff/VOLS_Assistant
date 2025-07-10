@@ -367,9 +367,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return SEARCH_TP
         elif text == "🔔 Отправить уведомление" and has_access(user_data, "all"):
-            back_button = [["⬅️ Назад"]]
             await update.message.reply_text(
-                "Введите наименование ТП где обнаружен бездоговорной ВОЛС:", reply_markup=ReplyKeyboardMarkup(back_button, resize_keyboard=True)
+                f"Введите наименование ТП для уведомления в {selected_es}:", reply_markup=ReplyKeyboardRemove()
             )
             return NOTIFY_TP
         elif text == "📚 Справка" and has_access(user_data, "all"):
@@ -490,16 +489,7 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    text = update.message.text
-    if text == "⬅️ Назад":
-        selected_es = context.user_data.get("selected_es", "")
-        context.user_data["state"] = "ES_SUBMENU"
-        await update.message.reply_text(
-            f"Выберите действие для {selected_es}:", reply_markup=build_es_submenu(user_data)
-        )
-        return ConversationHandler.END
-
-    search_term = text
+    search_term = update.message.text
     selected_es = context.user_data.get("selected_es", "")
     is_rosseti_yug = context.user_data.get("is_rosseti_yug", False)
     df = load_tp_directory_data(selected_es, is_rosseti_yug)
@@ -519,7 +509,7 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["selected_tp"] = search_term
         context.user_data["vl_options"] = vl_options
         await update.message.reply_text(
-            f"Выберите ВЛ для {search_term}:", 
+            f"Выберите ВЛ для ТП {search_term}:", 
             reply_markup=build_vl_selection_menu(vl_options)
         )
         return NOTIFY_VL
@@ -527,10 +517,9 @@ async def notify_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Fuzzy search
     tp_options = fuzzy_search_tp(search_term, df)
     if not tp_options:
-        back_button = [["⬅️ Назад"]]
         await update.message.reply_text(
             f"ТП с названием '{search_term}' не найдено в справочнике {selected_es}. Попробуйте еще раз:",
-            reply_markup=ReplyKeyboardMarkup(back_button, resize_keyboard=True)
+            reply_markup=ReplyKeyboardRemove()
         )
         return NOTIFY_TP
 
@@ -558,10 +547,8 @@ async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vl_options = context.user_data.get("vl_options", [])
 
     if text == "⬅️ Назад":
-        back_button = [["⬅️ Назад"]]
         await update.message.reply_text(
-            "Введите наименование ТП где обнаружен бездоговорной ВОЛС:", 
-            reply_markup=ReplyKeyboardMarkup(back_button, resize_keyboard=True)
+            f"Введите наименование ТП для уведомления в {selected_es}:", reply_markup=ReplyKeyboardRemove()
         )
         return NOTIFY_TP
 
@@ -581,7 +568,7 @@ async def notify_vl(update: Update, context: ContextTypes.DEFAULT_TYPE):
         vl_options = df[df["Наименование ТП"] == text]["Наименование ВЛ"].dropna().unique().tolist()
         context.user_data["vl_options"] = vl_options
         await update.message.reply_text(
-            f"Выберите ВЛ для {text}:", 
+            f"Выберите ВЛ для ТП {text}:", 
             reply_markup=build_vl_selection_menu(vl_options)
         )
         return NOTIFY_VL
@@ -643,10 +630,9 @@ async def notify_geo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sender_fio = user_data["FIO"]
     notification = f"⚠️ Уведомление! Найден бездоговорной ВОЛС! {sender_fio}, {selected_tp}, {selected_vl}. Геоданные."
     await context.bot.send_message(chat_id=responsible_id, text=notification)
-    await context.bot.send_location(chat_id=responsible_id, latitude=latitude, longitude=longitude)
     await context.bot.send_message(chat_id=responsible_id, text=geo_data)
     await update.message.reply_text(
-        f"✅ Уведомление отправлено! {res} РЭС, {responsible_fio}.",
+        f"✅ Уведомление отправлено! {res}, {responsible_fio}.",
         reply_markup=build_es_submenu(user_data)
     )
     context.user_data["state"] = "ES_SUBMENU"

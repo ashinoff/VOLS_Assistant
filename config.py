@@ -54,3 +54,6 @@ LABINSK_URL_RK_SP = os.getenv("LABINSK_URL_RK_SP", "")
 KRASNODAR_URL_RK_SP = os.getenv("KRASNODAR_URL_RK_SP", "")
 ARMAVIR_URL_RK_SP = os.getenv("ARMAVIR_URL_RK_SP", "")
 ADYGEYSK_URL_RK_SP = os.getenv("ADYGEYSK_URL_RK_SP", "")
+
+NOTIFY_LOG_FILE_UG = "notify_log_ug.csv"
+NOTIFY_LOG_FILE_RK = "notify_log_rk.csv"

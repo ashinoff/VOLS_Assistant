@@ -50,36 +50,29 @@ ACTION_MENU = [[KeyboardButton("🔍 Поиск ТП")], [KeyboardButton("📨 �
 
 # URL map for regions
 URL_MAP: Dict[str, Dict[str, tuple]] = {
-    "ЮГ": {**{b: URL_MAP_val for b, URL_MAP_val in zip([
-        "Юго-Западные ЭС", "Центральные ЭС", "Западные ЭС", "Восточные ЭС",
-        "Южные ЭС", "Северо-Восточные ЭС", "Юго-Восточные ЭС", "Северные ЭС"
-    ], [
-        (YUGO_ZAPAD_URL_UG, YUGO_ZAPAD_URL_UG_SP),
-        (CENTRAL_URL_UG, CENTRAL_URL_UG_SP),
-        (ZAPAD_URL_UG, ZAPAD_URL_UG_SP),
-        (VOSTOCH_URL_UG, VOSTOCH_URL_UG_SP),
-        (YUZH_URL_UG, YUZH_URL_UG_SP),
-        (SEVERO_VOSTOCH_URL_UG, SEVERO_VOSTOCH_URL_UG_SP),
-        (YUGO_VOSTOCH_URL_UG, YUGO_VOSTOCH_URL_UG_SP),
-        (SEVER_URL_UG, SEVER_URL_UG_SP)
-    ])},
-    "Кубань": {**{b: URL_MAP_val for b, URL_MAP_val in zip([
-        "Юго-Западные ЭС", "Усть-Лабинские ЭС", "Тимашевские ЭС", "Тихорецкие ЭС",
-        "Сочинские ЭС", "Славянские ЭС", "Ленинградские ЭС", "Лабинские ЭС",
-        "Краснодарские ЭС", "Армавирские ЭС", "Адыгейские ЭС"
-    ], [
-        (YUGO_ZAPAD_URL_RK, YUGO_ZAPAD_URL_RK_SP),
-        (UST_LABINSK_URL_RK, UST_LABINSK_URL_RK_SP),
-        (TIMASHEVSK_URL_RK, TIMASHEVSK_URL_RK_SP),
-        (TIKHORETSK_URL_RK, TIKHORETSK_URL_RK_SP),
-        (SOCHI_URL_RK, SOCHI_URL_RK_SP),
-        (SLAVYANSK_URL_RK, SLAVYANSK_URL_RK_SP),
-        (LENINGRADSK_URL_RK, LENINGRADSK_URL_RK_SP),
-        (LABINSK_URL_RK, LABINSK_URL_RK_SP),
-        (KRASNODAR_URL_RK, KRASNODAR_URL_RK_SP),
-        (ARMAVIR_URL_RK, ARMAVIR_URL_RK_SP),
-        (ADYGEYSK_URL_RK, ADYGEYSK_URL_RK_SP)
-    ])}
+    "ЮГ": {
+        "Юго-Западные ЭС": (YUGO_ZAPAD_URL_UG, YUGO_ZAPAD_URL_UG_SP),
+        "Центральные ЭС": (CENTRAL_URL_UG, CENTRAL_URL_UG_SP),
+        "Западные ЭС": (ZAPAD_URL_UG, ZAPAD_URL_UG_SP),
+        "Восточные ЭС": (VOSTOCH_URL_UG, VOSTOCH_URL_UG_SP),
+        "Южные ЭС": (YUZH_URL_UG, YUZH_URL_UG_SP),
+        "Северо-Восточные ЭС": (SEVERO_VOSTOCH_URL_UG, SEVERO_VOSTOCH_URL_UG_SP),
+        "Юго-Восточные ЭС": (YUGO_VOSTOCH_URL_UG, YUGO_VOSTOCH_URL_UG_SP),
+        "Северные ЭС": (SEVER_URL_UG, SEVER_URL_UG_SP),
+    },
+    "Кубань": {
+        "Юго-Западные ЭС": (YUGO_ZAPAD_URL_RK, YUGO_ZAPAD_URL_RK_SP),
+        "Усть-Лабинские ЭС": (UST_LABINSK_URL_RK, UST_LABINSK_URL_RK_SP),
+        "Тимашевские ЭС": (TIMASHEVSK_URL_RK, TIMASHEVSK_URL_RK_SP),
+        "Тихорецкие ЭС": (TIKHORETSK_URL_RK, TIKHORETSK_URL_RK_SP),
+        "Сочинские ЭС": (SOCHI_URL_RK, SOCHI_URL_RK_SP),
+        "Славянские ЭС": (SLAVYANSK_URL_RK, SLAVYANSK_URL_RK_SP),
+        "Ленинградские ЭС": (LENINGRADSK_URL_RK, LENINGRADSK_URL_RK_SP),
+        "Лабинские ЭС": (LABINSK_URL_RK, LABINSK_URL_RK_SP),
+        "Краснодарские ЭС": (KRASNODAR_URL_RK, KRASNODAR_URL_RK_SP),
+        "Армавирские ЭС": (ARMAVIR_URL_RK, ARMAVIR_URL_RK_SP),
+        "Адыгейские ЭС": (ADYGEYSK_URL_RK, ADYGEYSK_URL_RK_SP),
+    }
 }
 
 # CSV cache

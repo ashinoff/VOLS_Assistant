@@ -198,7 +198,7 @@ def has_access(user_data: Dict[str, Any], required_vis: str) -> bool:
     uv = user_data.get("Visibility", "").lower()
     return uv == "all" or required_vis == "all" or uv == required_vis.lower()
 
-# ... (other utility functions: load_tp_data, load_tp_directory_data, fuzzy_search_tp, find_responsible) ...
+# ... (other utility functions) ...
 
 # Handlers
 async def start(
@@ -236,7 +236,6 @@ async def handle_message(
     if state == "MAIN_MENU":
         if text == "⚡️ Россети ЮГ":
             context.user_data.update(state="ROSSETI_YUG", is_rosseti_yug=True)
-            # show submenu...
         elif text == "⚡️ Россети Кубань":
             context.user_data.update(state="ROSSETI_KUBAN", is_rosseti_yug=False)
         elif text == "📊 Выгрузить отчеты":
@@ -248,7 +247,6 @@ async def handle_message(
             return REPORT_MENU
         elif text == "⬅️ Назад":
             return await start(update, context)
-        # ... other MAIN_MENU items
         return ConversationHandler.END
 
     # REPORT_MENU
@@ -278,10 +276,8 @@ async def handle_message(
                 "Выберите действие:", reply_markup=build_menu(MAIN_MENU, ud)
             )
             return ConversationHandler.END
-        # stay in REPORT_MENU for further selections
         return REPORT_MENU
 
-    # ... other states handlers (TP search, notify, etc.)
     return ConversationHandler.END
 
 async def error_handler(
@@ -306,11 +302,11 @@ async def on_startup() -> None:
     conv = ConversationHandler(
         entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         states={
-            SEARCH_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, /*...*/)],
-            SELECT_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, /*...*/)],
-            NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, /*...*/)],
-            NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, /*...*/)],
-            NOTIFY_GEO: [MessageHandler(filters.LOCATION, /*...*/)],
+            SEARCH_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_tp)],
+            SELECT_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_tp)],
+            NOTIFY_TP: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_tp)],
+            NOTIFY_VL: [MessageHandler(filters.TEXT & ~filters.COMMAND, notify_vl)],
+            NOTIFY_GEO: [MessageHandler(filters.LOCATION, notify_geo)],
             REPORT_MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)],
         },
         fallbacks=[CommandHandler("cancel", start)],

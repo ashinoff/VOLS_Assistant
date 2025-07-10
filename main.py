@@ -12,21 +12,14 @@ from handlers.search_tp import (
 )
 from config import TOKEN, PORT, SELF_URL
 
-# Настройка Flask
 app = Flask(__name__)
-
 WEBHOOK_PATH = "/webhook"
-
-# Глобальная переменная Application
 application = None
 
 def setup_app():
     global application
     application = ApplicationBuilder().token(TOKEN).build()
-
-    # Регистрируем хендлеры
     application.add_handler(CommandHandler("start", start))
-
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Поиск по ТП$"), search_tp_start)],
         states={
@@ -39,7 +32,6 @@ def setup_app():
 
 setup_app()
 
-# Запуск и настройка вебхука (асинхронно)
 async def on_startup():
     await application.initialize()
     await application.bot.delete_webhook()
@@ -49,7 +41,11 @@ async def on_startup():
 @app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    asyncio.get_event_loop().create_task(application.process_update(update))
+    # Костыль: отдельный event loop для каждого потока Flask
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(application.process_update(update))
+    loop.close()
     return "OK"
 
 @app.route("/")

@@ -194,9 +194,21 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
 def get_branch_keyboard(branches: List[str]) -> ReplyKeyboardMarkup:
     """Получить клавиатуру с филиалами"""
     keyboard = []
-    # Добавляем филиалы по одному в строку для выравнивания
-    for branch in branches:
-        keyboard.append([f'⚡ {branch}'])
+    
+    if len(branches) == 11:  # РОССЕТИ КУБАНЬ
+        # 5 слева, 5 справа, 1 внизу (Сочинские)
+        for i in range(0, 10, 2):
+            keyboard.append([f'⚡ {branches[i]}', f'⚡ {branches[i+1]}'])
+        keyboard.append([f'⚡ {branches[10]}'])  # Сочинские ЭС
+    elif len(branches) == 8:  # РОССЕТИ ЮГ  
+        # 4 слева, 4 справа
+        for i in range(0, 8, 2):
+            keyboard.append([f'⚡ {branches[i]}', f'⚡ {branches[i+1]}'])
+    else:
+        # Для других случаев - по одному в строку
+        for branch in branches:
+            keyboard.append([f'⚡ {branch}'])
+    
     keyboard.append(['⬅️ Назад'])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -626,6 +638,8 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_name = sender_permissions['name']
         
         success_count = 0
+        failed_users = []
+        
         for recipient_id, recipient_data in responsible_users:
             try:
                 # Отправляем сообщение
@@ -668,11 +682,24 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {recipient_id}: {e}")
+                if "Chat not found" in str(e):
+                    failed_users.append(f"{recipient_data['name']} (не начал диалог с ботом)")
+                else:
+                    failed_users.append(f"{recipient_data['name']} ({str(e)})")
         
-        if success_count > 0:
+        # Формируем ответ
+        if success_count > 0 and not failed_users:
             await update.message.reply_text(f"✅ Уведомление отправлено ответственному за {res} РЭС")
+        elif success_count > 0 and failed_users:
+            await update.message.reply_text(
+                f"⚠️ Уведомление отправлено {success_count} из {len(responsible_users)} ответственных за {res} РЭС\n\n"
+                f"Не удалось отправить:\n" + "\n".join(f"• {user}" for user in failed_users)
+            )
         else:
-            await update.message.reply_text(f"❌ Не удалось отправить уведомления")
+            await update.message.reply_text(
+                f"❌ Не удалось отправить уведомления\n\n"
+                f"Проблемы:\n" + "\n".join(f"• {user}" for user in failed_users)
+            )
         
         # Возвращаемся в меню филиала
         branch_name = user_states[user_id].get('branch')

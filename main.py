@@ -239,26 +239,41 @@ def get_reports_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# Справочные документы - настройте в переменных окружения
+REFERENCE_DOCS = {
+    'План по выручке ВОЛС на ВЛ 24-26 годы': os.environ.get('DOC_PLAN_VYRUCHKA_URL'),
+    'Регламент ВОЛС': os.environ.get('DOC_REGLAMENT_VOLS_URL'),
+    'Форма акта инвентаризации': os.environ.get('DOC_AKT_INVENTARIZACII_URL'),
+    'Форма гарантийного письма': os.environ.get('DOC_GARANTIJNOE_PISMO_URL'),
+    'Форма претензионного письма': os.environ.get('DOC_PRETENZIONNOE_PISMO_URL'),
+}
+
 def get_reference_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура справки с динамическими кнопками из Google Drive"""
+    """Клавиатура справки с документами"""
     keyboard = []
     
-    # Получаем список файлов из переменной окружения
-    folder_id = os.environ.get('REFERENCE_FOLDER_ID')
-    if folder_id:
-        try:
-            # Здесь должен быть код для получения списка файлов из Google Drive
-            # Пока используем статические кнопки
-            keyboard.append(['📄 Форма доп соглашения'])
-            keyboard.append(['📄 Форма претензии'])
-        except Exception as e:
-            logger.error(f"Ошибка получения файлов справки: {e}")
-            keyboard.append(['📄 Форма доп соглашения'])
-            keyboard.append(['📄 Форма претензии'])
-    else:
-        # Статические кнопки по умолчанию
-        keyboard.append(['📄 Форма доп соглашения'])
-        keyboard.append(['📄 Форма претензии'])
+    # Добавляем только те документы, для которых есть ссылки
+    # Размещаем по одному в строке из-за длинных названий
+    for doc_name, doc_url in REFERENCE_DOCS.items():
+        if doc_url:
+            # Сокращаем название для кнопки если оно слишком длинное
+            button_text = doc_name
+            if len(doc_name) > 30:
+                # Сокращенные версии для длинных названий
+                if 'План по выручке' in doc_name:
+                    button_text = '📊 План выручки ВОЛС 24-26'
+                elif 'Форма акта инвентаризации' in doc_name:
+                    button_text = '📄 Акт инвентаризации'
+                elif 'Форма гарантийного письма' in doc_name:
+                    button_text = '📄 Гарантийное письмо'
+                elif 'Форма претензионного письма' in doc_name:
+                    button_text = '📄 Претензионное письмо'
+                else:
+                    button_text = f'📄 {doc_name[:27]}...'
+            else:
+                button_text = f'📄 {doc_name}'
+            
+            keyboard.append([button_text])
     
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -564,12 +579,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Справка
     elif state == 'reference':
-        if text == '📄 Форма доп соглашения':
-            # Здесь должна быть загрузка документа с Google Drive
-            await update.message.reply_text("📄 Документ будет отправлен...")
-        elif text == '📄 Форма претензии':
-            # Здесь должна быть загрузка документа с Google Drive
-            await update.message.reply_text("📄 Документ будет отправлен...")
+        if text.startswith('📄 ') or text.startswith('📊 '):
+            # Убираем эмодзи и ищем соответствующий документ
+            button_text = text[2:].strip()
+            
+            # Маппинг сокращенных названий к полным
+            doc_mapping = {
+                'План выручки ВОЛС 24-26': 'План по выручке ВОЛС на ВЛ 24-26 годы',
+                'Акт инвентаризации': 'Форма акта инвентаризации',
+                'Гарантийное письмо': 'Форма гарантийного письма',
+                'Претензионное письмо': 'Форма претензионного письма',
+                'Регламент ВОЛС': 'Регламент ВОЛС'
+            }
+            
+            # Ищем полное название
+            doc_name = doc_mapping.get(button_text, button_text)
+            
+            # Если не нашли в маппинге, ищем прямое совпадение
+            if doc_name not in REFERENCE_DOCS:
+                # Ищем частичное совпадение
+                for full_name in REFERENCE_DOCS.keys():
+                    if button_text in full_name or full_name in button_text:
+                        doc_name = full_name
+                        break
+            
+            doc_url = REFERENCE_DOCS.get(doc_name)
+            
+            if doc_url:
+                try:
+                    # Определяем тип файла по URL
+                    if 'docs.google.com/document' in doc_url:
+                        # Google Docs - отправляем как PDF
+                        pdf_url = doc_url.replace('/edit', '/export?format=pdf')
+                        await update.message.reply_document(
+                            document=pdf_url,
+                            filename=f"{doc_name}.pdf",
+                            caption=f"📄 {doc_name}"
+                        )
+                    elif 'docs.google.com/spreadsheets' in doc_url:
+                        # Google Sheets - отправляем как Excel
+                        xlsx_url = doc_url.replace('/edit', '/export?format=xlsx')
+                        await update.message.reply_document(
+                            document=xlsx_url,
+                            filename=f"{doc_name}.xlsx",
+                            caption=f"📊 {doc_name}"
+                        )
+                    elif 'drive.google.com' in doc_url:
+                        # Прямая ссылка на файл в Google Drive
+                        # Преобразуем в прямую ссылку для скачивания
+                        if '/file/d/' in doc_url:
+                            file_id = doc_url.split('/file/d/')[1].split('/')[0]
+                            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                            await update.message.reply_document(
+                                document=direct_url,
+                                caption=f"📄 {doc_name}"
+                            )
+                        else:
+                            await update.message.reply_text(
+                                f"📄 {doc_name}\n\n"
+                                f"Ссылка для скачивания:\n{doc_url}"
+                            )
+                    else:
+                        # Другие ссылки - просто отправляем
+                        await update.message.reply_text(
+                            f"📄 {doc_name}\n\n"
+                            f"Ссылка для скачивания:\n{doc_url}"
+                        )
+                except Exception as e:
+                    logger.error(f"Ошибка отправки документа {doc_name}: {e}")
+                    await update.message.reply_text(
+                        f"❌ Не удалось отправить документ\n"
+                        f"Попробуйте скачать по ссылке:\n{doc_url}"
+                    )
+            else:
+                await update.message.reply_text(f"❌ Документ не найден")
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""

@@ -24,8 +24,8 @@ ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
 # Списки филиалов
 ROSSETI_KUBAN_BRANCHES = [
     "Юго-Западные ЭС", "Усть-Лабинские ЭС", "Тимашевские ЭС", "Тихорецкие ЭС",
-    "Сочинские ЭС", "Славянские ЭС", "Ленинградские ЭС", "Лабинские ЭС",
-    "Краснодарские ЭС", "Армавирские ЭС", "Адыгейские ЭС"
+    "Славянские ЭС", "Ленинградские ЭС", "Лабинские ЭС",
+    "Краснодарские ЭС", "Армавирские ЭС", "Адыгейские ЭС", "Сочинские ЭС"
 ]
 
 ROSSETI_YUG_BRANCHES = [
@@ -167,12 +167,12 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
         if branch == 'All':
             keyboard.append(['🏢 РОССЕТИ КУБАНЬ'])
         else:
-            keyboard.append([f'🏭 {branch}'])
+            keyboard.append([f'⚡ {branch}'])
     elif visibility == 'UG':
         if branch == 'All':
             keyboard.append(['🏢 РОССЕТИ ЮГ'])
         else:
-            keyboard.append([f'🏭 {branch}'])
+            keyboard.append([f'⚡ {branch}'])
     
     # Телефоны контрагентов
     keyboard.append(['📞 ТЕЛЕФОНЫ КОНТРАГЕНТОВ'])
@@ -194,11 +194,9 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
 def get_branch_keyboard(branches: List[str]) -> ReplyKeyboardMarkup:
     """Получить клавиатуру с филиалами"""
     keyboard = []
-    for i in range(0, len(branches), 2):
-        row = [f'🏭 {branches[i]}']
-        if i + 1 < len(branches):
-            row.append(f'🏭 {branches[i+1]}')
-        keyboard.append(row)
+    # Добавляем филиалы по одному в строку для выравнивания
+    for branch in branches:
+        keyboard.append([f'⚡ {branch}'])
     keyboard.append(['⬅️ Назад'])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -322,6 +320,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=get_branch_menu_keyboard()
                     )
         
+        elif text.startswith('⚡ '):
+            # Обработка прямого перехода к филиалу для пользователей с ограниченными правами
+            branch = text[2:]
+            network = 'RK' if permissions['visibility'] == 'RK' else 'UG'
+            user_states[user_id] = {'state': f'branch_{branch}', 'branch': branch, 'network': network}
+            await update.message.reply_text(
+                f"Меню филиала {branch}",
+                reply_markup=get_branch_menu_keyboard()
+            )
+        
         elif text == '📊 ОТЧЕТЫ':
             user_states[user_id] = {'state': 'reports'}
             await update.message.reply_text(
@@ -341,8 +349,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Выбор филиала
     elif state in ['rosseti_kuban', 'rosseti_yug']:
-        if text.startswith('🏭 '):
-            branch = text[2:]
+        if text.startswith('⚡ '):
+            branch = text[2:]  # Убираем символ молнии
             user_states[user_id]['state'] = f'branch_{branch}'
             user_states[user_id]['branch'] = branch
             await update.message.reply_text(
@@ -591,15 +599,25 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         branch = tp_data.get('Филиал', '')
         res = tp_data.get('РЭС', '')
         
+        logger.info(f"Ищем ответственных для Филиал: {branch}, РЭС: {res}")
+        
+        # Загружаем свежие данные пользователей
+        load_users_data()
+        
         # Ищем ответственных
         responsible_users = []
         for tid, user_data in users_cache.items():
-            if user_data['responsible'] in [branch, res]:
+            responsible = user_data.get('responsible', '')
+            # Проверяем совпадение с филиалом или РЭС
+            if responsible and (responsible.strip() == branch.strip() or responsible.strip() == res.strip()):
                 responsible_users.append((tid, user_data))
+                logger.info(f"Найден ответственный: {tid} - {user_data['name']} (ответственный за: {responsible})")
         
         if not responsible_users:
             await update.message.reply_text(f"❌ Ответственный не назначен на {res} РЭС")
-            user_states[user_id] = {'state': f'branch_{user_states[user_id]["branch"]}'}
+            # Возвращаемся в меню филиала
+            branch_name = user_states[user_id].get('branch')
+            user_states[user_id] = {'state': f'branch_{branch_name}', 'branch': branch_name, 'network': user_states[user_id].get('network')}
             await update.message.reply_text("Меню филиала", reply_markup=get_branch_menu_keyboard())
             return
         
@@ -607,6 +625,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sender_permissions = get_user_permissions(user_id)
         sender_name = sender_permissions['name']
         
+        success_count = 0
         for recipient_id, recipient_data in responsible_users:
             try:
                 # Отправляем сообщение
@@ -625,8 +644,10 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Отправляем координаты текстом
                 await context.bot.send_message(
                     chat_id=recipient_id,
-                    text=f"Координаты: {location.latitude}, {location.longitude}"
+                    text=f"{location.latitude}, {location.longitude}"
                 )
+                
+                success_count += 1
                 
                 # Сохраняем уведомление
                 notification = {
@@ -646,12 +667,16 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 notifications_storage[network].append(notification)
                 
             except Exception as e:
-                logger.error(f"Ошибка отправки уведомления: {e}")
+                logger.error(f"Ошибка отправки уведомления пользователю {recipient_id}: {e}")
         
-        await update.message.reply_text(f"✅ Уведомление отправлено ответственному за {res} РЭС")
+        if success_count > 0:
+            await update.message.reply_text(f"✅ Уведомление отправлено ответственному за {res} РЭС")
+        else:
+            await update.message.reply_text(f"❌ Не удалось отправить уведомления")
         
         # Возвращаемся в меню филиала
-        user_states[user_id] = {'state': f'branch_{user_states[user_id]["branch"]}'}
+        branch_name = user_states[user_id].get('branch')
+        user_states[user_id] = {'state': f'branch_{branch_name}', 'branch': branch_name, 'network': user_states[user_id].get('network')}
         await update.message.reply_text("Меню филиала", reply_markup=get_branch_menu_keyboard())
 
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):

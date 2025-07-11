@@ -47,8 +47,32 @@ users_cache = {}
 
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
-    # Убираем "ЭС" из названия для формирования ключа
-    branch_key = branch.replace(' ЭС', '').upper().replace(' ', '_').replace('-', '_')
+    # Транслитерация русских названий в латиницу
+    translit_map = {
+        'Юго-Западные': 'YUGO_ZAPADNYE',
+        'Усть-Лабинские': 'UST_LABINSKIE', 
+        'Тимашевские': 'TIMASHEVSKIE',
+        'Тихорецкие': 'TIKHORETSKIE',
+        'Сочинские': 'SOCHINSKIE',
+        'Славянские': 'SLAVYANSKIE',
+        'Ленинградские': 'LENINGRADSKIE',
+        'Лабинские': 'LABINSKIE',
+        'Краснодарские': 'KRASNODARSKIE',
+        'Армавирские': 'ARMAVIRSKIE',
+        'Адыгейские': 'ADYGEYSKIE',
+        'Центральные': 'TSENTRALNYE',
+        'Западные': 'ZAPADNYE',
+        'Восточные': 'VOSTOCHNYE',
+        'Южные': 'YUZHNYE',
+        'Северо-Восточные': 'SEVERO_VOSTOCHNYE',
+        'Юго-Восточные': 'YUGO_VOSTOCHNYE',
+        'Северные': 'SEVERNYE'
+    }
+    
+    # Убираем "ЭС" и ищем в словаре транслитерации
+    branch_clean = branch.replace(' ЭС', '').strip()
+    branch_key = translit_map.get(branch_clean, branch_clean.upper().replace(' ', '_').replace('-', '_'))
+    
     suffix = f"_{network}_SP" if is_reference else f"_{network}"
     env_key = f"{branch_key}_URL{suffix}"
     logger.info(f"Ищем переменную окружения: {env_key} для филиала: {branch}")
@@ -63,7 +87,14 @@ def load_csv_from_url(url: str) -> List[Dict]:
         
         csv_file = io.StringIO(response.text)
         reader = csv.DictReader(csv_file)
-        return list(reader)
+        
+        # Нормализуем заголовки - убираем лишние пробелы
+        data = []
+        for row in reader:
+            normalized_row = {key.strip(): value.strip() if value else '' for key, value in row.items()}
+            data.append(normalized_row)
+        
+        return data
     except Exception as e:
         logger.error(f"Ошибка загрузки CSV: {e}")
         return []
@@ -501,11 +532,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""
+    if not results:
+        await update.message.reply_text("❌ Результаты не найдены")
+        return
+        
+    # Получаем РЭС из первого результата
     res_name = results[0].get('РЭС', 'Неизвестный')
     
     message = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
     
     for result in results:
+        # Обрабатываем каждый результат
         vl = result.get('Наименование ВЛ', '-')
         supports = result.get('Опоры', '-')
         supports_count = result.get('Количество опор', '-')
@@ -515,7 +552,29 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
         message += f"Опоры: {supports}, Количество опор: {supports_count}\n"
         message += f"Контрагент: {provider}\n\n"
     
-    await update.message.reply_text(message)
+    # Отправляем сообщение по частям, если оно слишком длинное
+    if len(message) > 4000:
+        parts = []
+        current_part = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
+        
+        for result in results:
+            result_text = f"⚡ ВЛ: {result.get('Наименование ВЛ', '-')}\n"
+            result_text += f"Опоры: {result.get('Опоры', '-')}, Количество опор: {result.get('Количество опор', '-')}\n"
+            result_text += f"Контрагент: {result.get('Наименование Провайдера', '-')}\n\n"
+            
+            if len(current_part + result_text) > 4000:
+                parts.append(current_part)
+                current_part = result_text
+            else:
+                current_part += result_text
+        
+        if current_part:
+            parts.append(current_part)
+        
+        for part in parts:
+            await update.message.reply_text(part)
+    else:
+        await update.message.reply_text(message)
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка геолокации"""

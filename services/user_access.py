@@ -1,11 +1,12 @@
 import pandas as pd
 import requests
+import io  # ← добавь импорт
 from config import ZONES_CSV_URL
 
 def get_zones_df():
     r = requests.get(ZONES_CSV_URL)
     r.raise_for_status()
-    df = pd.read_csv(pd.compat.StringIO(r.text))
+    df = pd.read_csv(io.StringIO(r.text))  # ← исправь здесь
     return df
 
 def get_user_rights(telegram_id: int):

@@ -647,11 +647,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}")
 
-async def post_init(application: Application) -> None:
-    """Инициализация после запуска приложения"""
-    await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
-    logger.info(f"Webhook установлен: {WEBHOOK_URL}/{BOT_TOKEN}")
-
 if __name__ == '__main__':
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
@@ -671,6 +666,5 @@ if __name__ == '__main__':
         port=PORT,
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        drop_pending_updates=True,
-        post_init=post_init
+        drop_pending_updates=True
     )

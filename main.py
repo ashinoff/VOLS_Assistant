@@ -113,7 +113,8 @@ def load_users_data():
                     'branch': row.get('Филиал', '').strip(),
                     'res': row.get('РЭС', '').strip(),
                     'name': row.get('ФИО', '').strip(),
-                    'responsible': row.get('Ответственный', '').strip()
+                    'responsible': row.get('Ответственный', '').strip(),
+                    'email': row.get('Email', '').strip()  # Добавляем email
                 }
         logger.info(f"Загружено {len(users_cache)} пользователей")
     except Exception as e:
@@ -246,6 +247,7 @@ REFERENCE_DOCS = {
     'Форма акта инвентаризации': os.environ.get('DOC_AKT_INVENTARIZACII_URL'),
     'Форма гарантийного письма': os.environ.get('DOC_GARANTIJNOE_PISMO_URL'),
     'Форма претензионного письма': os.environ.get('DOC_PRETENZIONNOE_PISMO_URL'),
+    'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
 }
 
 def get_reference_keyboard() -> ReplyKeyboardMarkup:
@@ -297,9 +299,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id] = {'state': 'main'}
     
     await update.message.reply_text(
-        f"👋 Добро пожаловать, {permissions['name']}!\n"
-        f"Ваш ID: {user_id}\n"
-        f"Ваши права: {permissions['visibility']} | {permissions['branch']} | {permissions['res']}",
+        f"👋 Добро пожаловать, {permissions['name']}!",
         reply_markup=get_main_keyboard(permissions)
     )
 
@@ -589,7 +589,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'Акт инвентаризации': 'Форма акта инвентаризации',
                 'Гарантийное письмо': 'Форма гарантийного письма',
                 'Претензионное письмо': 'Форма претензионного письма',
-                'Регламент ВОЛС': 'Регламент ВОЛС'
+                'Регламент ВОЛС': 'Регламент ВОЛС',
+                'Отчет по контрагентам': 'Отчет по контрагентам'
             }
             
             # Ищем полное название
@@ -810,13 +811,40 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     failed_users.append(f"{recipient_data['name']} ({str(e)})")
         
-        # Формируем ответ
+        # Формируем ответ с детальной информацией
         if success_count > 0 and not failed_users:
-            await update.message.reply_text(f"✅ Уведомление отправлено ответственному за {res} РЭС")
+            # Формируем список успешно отправленных
+            success_names = []
+            for recipient_id, recipient_data in responsible_users:
+                if recipient_id not in [user.split(' (')[0] for user in failed_users]:
+                    success_names.append(recipient_data['name'])
+            
+            await update.message.reply_text(
+                f"✅ Уведомление отправлено {success_count} из {len(responsible_users)} ответственных за {res} РЭС\n\n"
+                f"Получатели:\n" + "\n".join(f"• {name}" for name in success_names)
+            )
         elif success_count > 0 and failed_users:
+            # Формируем список успешно отправленных
+            success_names = []
+            for recipient_id, recipient_data in responsible_users:
+                # Проверяем, что пользователь не в списке неудачных
+                failed_ids = []
+                for failed in failed_users:
+                    if '(' in failed:
+                        name_part = failed.split(' (')[0]
+                        # Ищем ID этого пользователя
+                        for rid, rdata in responsible_users:
+                            if rdata['name'] == name_part:
+                                failed_ids.append(rid)
+                                break
+                
+                if recipient_id not in failed_ids:
+                    success_names.append(recipient_data['name'])
+            
             await update.message.reply_text(
                 f"⚠️ Уведомление отправлено {success_count} из {len(responsible_users)} ответственных за {res} РЭС\n\n"
-                f"Не удалось отправить:\n" + "\n".join(f"• {user}" for user in failed_users)
+                f"✅ Отправлено:\n" + "\n".join(f"• {name}" for name in success_names) + "\n\n"
+                f"❌ Не удалось отправить:\n" + "\n".join(f"• {user}" for user in failed_users)
             )
         else:
             await update.message.reply_text(

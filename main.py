@@ -240,12 +240,27 @@ def get_reports_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_reference_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура справки"""
-    keyboard = [
-        ['📄 Форма доп соглашения'],
-        ['📄 Форма претензии'],
-        ['⬅️ Назад']
-    ]
+    """Клавиатура справки с динамическими кнопками из Google Drive"""
+    keyboard = []
+    
+    # Получаем список файлов из переменной окружения
+    folder_id = os.environ.get('REFERENCE_FOLDER_ID')
+    if folder_id:
+        try:
+            # Здесь должен быть код для получения списка файлов из Google Drive
+            # Пока используем статические кнопки
+            keyboard.append(['📄 Форма доп соглашения'])
+            keyboard.append(['📄 Форма претензии'])
+        except Exception as e:
+            logger.error(f"Ошибка получения файлов справки: {e}")
+            keyboard.append(['📄 Форма доп соглашения'])
+            keyboard.append(['📄 Форма претензии'])
+    else:
+        # Статические кнопки по умолчанию
+        keyboard.append(['📄 Форма доп соглашения'])
+        keyboard.append(['📄 Форма претензии'])
+    
+    keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -253,9 +268,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     permissions = get_user_permissions(user_id)
     
+    # Логируем для отладки
+    logger.info(f"Пользователь {user_id} ({update.effective_user.first_name}) запустил бота")
+    
     if not permissions['visibility']:
         await update.message.reply_text(
-            "❌ У вас нет доступа к боту.\nОбратитесь к администратору для получения прав."
+            f"❌ У вас нет доступа к боту.\n"
+            f"Ваш ID: {user_id}\n"
+            f"Обратитесь к администратору для получения прав."
         )
         return
     
@@ -263,6 +283,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         f"👋 Добро пожаловать, {permissions['name']}!\n"
+        f"Ваш ID: {user_id}\n"
         f"Ваши права: {permissions['visibility']} | {permissions['branch']} | {permissions['res']}",
         reply_markup=get_main_keyboard(permissions)
     )
@@ -771,6 +792,31 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}")
+    """Проверка доступности пользователя для отправки сообщений"""
+    if len(context.args) == 0:
+        await update.message.reply_text("Использование: /checkuser <telegram_id>")
+        return
+    
+    target_id = context.args[0]
+    
+    try:
+        # Пытаемся получить информацию о чате
+        chat = await context.bot.get_chat(chat_id=target_id)
+        await update.message.reply_text(
+            f"✅ Пользователь доступен\n"
+            f"ID: {target_id}\n"
+            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
+            f"Username: @{chat.username or 'нет'}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
+            f"Ошибка: {str(e)}\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь не начал диалог с ботом\n"
+            f"• Пользователь заблокировал бота\n"
+            f"• Неверный ID"
+        )
 
 if __name__ == '__main__':
     # Создаем приложение
@@ -778,6 +824,7 @@ if __name__ == '__main__':
     
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("checkuser", check_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_error_handler(error_handler)

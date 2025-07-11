@@ -51,18 +51,25 @@ def load_csv(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
-        df = pd.read_csv(StringIO(response.text), sep=',', encoding='utf-8', quotechar='"')
+        df = pd.read_csv(StringIO(response.text), sep=',', quotechar='"')
         logging.info(f"Loaded CSV from {url} with columns: {df.columns.tolist()}")
         return df
     except Exception as e:
         logging.error(f"Error loading CSV from {url}: {e}")
         return pd.DataFrame()
 
+def load_zones():
+    df = load_csv(ZONES_URL)
+    if df.empty:
+        return df
+    df.columns = ['Видимость', 'Филиал', 'РЭС', 'Telegram ID', 'ФИО', 'Ответственный', 'Email']
+    df['Telegram ID'] = pd.to_numeric(df['Telegram ID'], errors='coerce')
+    return df
+
 def get_user_zone(user_id):
-    zones_df = load_csv(ZONES_URL)
+    zones_df = load_zones()
     if zones_df.empty:
         return None
-    zones_df['Telegram ID'] = pd.to_numeric(zones_df['Telegram ID'], errors='coerce')
     user_row = zones_df[zones_df['Telegram ID'] == user_id]
     return user_row.iloc[0] if not user_row.empty else None
 
@@ -308,7 +315,7 @@ def handle_location(message):
     if matching.empty: return
     row = matching.iloc[0]
     filial_sp, res_sp = row['Филиал'], row['РЭС']
-    zones_df = load_csv(ZONES_URL)
+    zones_df = load_zones()
     resp_ids = zones_df[zones_df['Ответственный'].isin([filial_sp, res_sp])]['Telegram ID'].unique()
     if len(resp_ids) == 0:
         bot.send_message(message.chat.id, f"Ответственный не назначен на {res_sp} РЭС")

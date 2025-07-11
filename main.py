@@ -51,7 +51,9 @@ def load_csv(url):
     try:
         response = requests.get(url)
         response.raise_for_status()
-        return pd.read_csv(StringIO(response.text), encoding='utf-8')
+        df = pd.read_csv(StringIO(response.text), sep='\t', encoding='utf-8')
+        logging.info(f"Loaded CSV from {url} with columns: {df.columns.tolist()}")
+        return df
     except Exception as e:
         logging.error(f"Error loading CSV from {url}: {e}")
         return pd.DataFrame()

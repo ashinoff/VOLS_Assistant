@@ -1,22 +1,14 @@
 import os
+from dotenv import load_dotenv
 
-TOKEN = os.environ.get("TOKEN")
-SELF_URL = os.environ.get("SELF_URL", "")
-PORT = int(os.environ.get("PORT", 10000))
+load_dotenv()
 
-ZONES_CSV_URL = os.environ.get("ZONES_CSV_URL", "")
+TOKEN = os.getenv("TOKEN")
+SELF_URL = os.getenv("SELF_URL")         # твой render-сайт (https://...)
+PORT = int(os.getenv("PORT", 8000))
 
-# Пример для одного филиала. Остальные добавь по образцу.
-TIMASHEVSKIE_ES_URL_RK = os.environ.get("TIMASHEVSKIE_ES_URL_RK", "")
-YUGO_ZAPAD_URL_UG = os.environ.get("YUGO_ZAPAD_URL_UG", "")
+ZONES_CSV_URL = os.getenv("ZONES_CSV_URL")  # ссылка на таблицу прав
 
-TIMASHEVSKIE_ES_URL_RK_SP = os.environ.get("TIMASHEVSKIE_ES_URL_RK_SP", "")
-YUGO_ZAPAD_URL_UG_SP = os.environ.get("YUGO_ZAPAD_URL_UG_SP", "")
-
-HELP_FOLDER_URL = os.environ.get("HELP_FOLDER_URL", "")
-
-NOTIFY_LOG_FILE_RK = os.environ.get("NOTIFY_LOG_FILE_RK", "")
-NOTIFY_LOG_FILE_UG = os.environ.get("NOTIFY_LOG_FILE_UG", "")
-
-# Для автопинга
-PING_URL = os.environ.get("PING_URL", SELF_URL)
+# Для будущих доработок
+HELP_FOLDER_URL = os.getenv("HELP_FOLDER_URL", "")
+# ... и так далее, если надо

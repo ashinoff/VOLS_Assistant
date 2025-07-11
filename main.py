@@ -8,16 +8,12 @@ from typing import Dict, List, Tuple, Optional
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from flask import Flask, request
 import pandas as pd
 from io import BytesIO
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Flask app для webhook
-app = Flask(__name__)
 
 # Константы
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -647,26 +643,16 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         caption=f"📊 Отчет по уведомлениям {network_name}"
     )
 
-# Webhook handler
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    """Handle incoming Telegram updates via webhook"""
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put(update)
-    return 'OK'
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Exception while handling an update: {context.error}")
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return 'OK', 200
+async def post_init(application: Application) -> None:
+    """Инициализация после запуска приложения"""
+    await application.bot.set_webhook(f"{WEBHOOK_URL}/{BOT_TOKEN}")
+    logger.info(f"Webhook установлен: {WEBHOOK_URL}/{BOT_TOKEN}")
 
-# Создаем приложение
-application = None
-
-def setup_application():
-    """Настройка приложения"""
-    global application
-    
+if __name__ == '__main__':
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -674,23 +660,17 @@ def setup_application():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_error_handler(error_handler)
     
     # Загружаем данные пользователей
     load_users_data()
-    
-    return application
-
-if __name__ == '__main__':
-    # Настраиваем приложение
-    application = setup_application()
     
     # Запускаем webhook
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True,
+        post_init=post_init
     )
-    
-    # Запускаем Flask сервер
-    app.run(host='0.0.0.0', port=PORT)

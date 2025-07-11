@@ -14,7 +14,6 @@ def get_zones_df():
     r = requests.get(ZONES_CSV_URL)
     r.raise_for_status()
     df = pd.read_csv(io.StringIO(r.text))
-    print("СТОЛБЦЫ CSV:", df.columns.tolist())
     return df
 
 def get_user_rights(telegram_id: int):
@@ -22,7 +21,6 @@ def get_user_rights(telegram_id: int):
     try:
         user_row = df[df['Telegram ID'] == telegram_id]
     except KeyError:
-        print("Нет колонки Telegram ID")
         return None
     if user_row.empty:
         return None
@@ -48,7 +46,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).webhook_url(f"{SELF_URL}/webhook").port(PORT).build()
+    app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    print("СТАРТ telegram-бота на порту", PORT)
-    app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{SELF_URL}/webhook")
+    print(f"СТАРТ telegram-бота на порту {PORT}")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=f"{SELF_URL}/webhook"
+    )

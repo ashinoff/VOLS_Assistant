@@ -48,6 +48,9 @@ ug_notifications = []
 user_state = {}
 
 def load_csv(url):
+    if url is None:
+        logging.error("URL is None")
+        return pd.DataFrame()
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -127,7 +130,13 @@ def handle_text(message):
             branch = state['branch']
             branches_dict = rk_branches if group == 'RK' else ug_branches
             info = branches_dict[branch]
-            url = os.getenv(info['key'] + '_URL_' + group)
+            env_key = info['key'] + '_URL_' + group
+            logging.info(f"Fetching data from env key: {env_key}")
+            url = os.getenv(env_key)
+            if url is None:
+                bot.send_message(message.chat.id, "База данных не настроена для этого филиала.")
+                del state['stage']
+                return
             df = load_csv(url)
             if df.empty:
                 bot.send_message(message.chat.id, "Ошибка данных.")
@@ -153,7 +162,13 @@ def handle_text(message):
             branch = state['branch']
             branches_dict = rk_branches if group == 'RK' else ug_branches
             info = branches_dict[branch]
-            url = os.getenv(info['key'] + '_URL_' + group + '_SP')
+            env_key = info['key'] + '_URL_' + group + '_SP'
+            logging.info(f"Fetching sp data from env key: {env_key}")
+            url = os.getenv(env_key)
+            if url is None:
+                bot.send_message(message.chat.id, "Справочник не настроен для этого филиала.")
+                del state['stage']
+                return
             df = load_csv(url)
             if df.empty:
                 bot.send_message(message.chat.id, "Ошибка данных.")
@@ -272,7 +287,12 @@ def handle_callback(call):
     info = branches_dict.get(branch, {})
     if data.startswith('search_tp_'):
         tp = data[10:]
-        url = os.getenv(info['key'] + '_URL_' + group)
+        env_key = info['key'] + '_URL_' + group
+        logging.info(f"Fetching data from env key: {env_key}")
+        url = os.getenv(env_key)
+        if url is None:
+            bot.send_message(call.message.chat.id, "База данных не настроена для этого филиала.")
+            return
         df = load_csv(url)
         results = df[df['Наименование ТП'] == tp]
         if results.empty: return
@@ -284,7 +304,12 @@ def handle_callback(call):
     elif data.startswith('notify_tp_'):
         tp = data[10:]
         user_state[user_id]['selected_tp'] = tp
-        url = os.getenv(info['key'] + '_URL_' + group + '_SP')
+        env_key = info['key'] + '_URL_' + group + '_SP'
+        logging.info(f"Fetching sp data from env key: {env_key}")
+        url = os.getenv(env_key)
+        if url is None:
+            bot.send_message(call.message.chat.id, "Справочник не настроен для этого филиала.")
+            return
         df = load_csv(url)
         vls = df[df['Наименование ТП'] == tp]['Наименование ВЛ'].unique()
         markup = InlineKeyboardMarkup()
@@ -309,7 +334,12 @@ def handle_location(message):
     group, branch = state['group'], state['branch']
     branches_dict = rk_branches if group == 'RK' else ug_branches
     info = branches_dict[branch]
-    url_sp = os.getenv(info['key'] + '_URL_' + group + '_SP')
+    env_key = info['key'] + '_URL_' + group + '_SP'
+    logging.info(f"Fetching sp data from env key: {env_key}")
+    url_sp = os.getenv(env_key)
+    if url_sp is None:
+        bot.send_message(message.chat.id, "Справочник не настроен для этого филиала.")
+        return
     df_sp = load_csv(url_sp)
     matching = df_sp[(df_sp['Наименование ТП'] == tp) & (df_sp['Наименование ВЛ'] == vl)]
     if matching.empty: return

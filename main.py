@@ -62,7 +62,7 @@ def load_zones():
     df = load_csv(ZONES_URL)
     if df.empty:
         return df
-    df.columns = ['Видимость', 'Филиал', 'РЭС', 'Telegram ID', 'ФИО', 'Ответственный', 'Email']
+    df.columns = ['Видимость', 'Филиал', 'РЭС', 'Telegram ID', 'ФИО', 'Ответственный']
     df['Telegram ID'] = pd.to_numeric(df['Telegram ID'], errors='coerce')
     return df
 

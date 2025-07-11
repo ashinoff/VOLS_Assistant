@@ -47,9 +47,12 @@ users_cache = {}
 
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
-    branch_key = branch.upper().replace(' ', '_').replace('-', '_')
+    # Убираем "ЭС" из названия для формирования ключа
+    branch_key = branch.replace(' ЭС', '').upper().replace(' ', '_').replace('-', '_')
     suffix = f"_{network}_SP" if is_reference else f"_{network}"
-    return f"{branch_key}_URL{suffix}"
+    env_key = f"{branch_key}_URL{suffix}"
+    logger.info(f"Ищем переменную окружения: {env_key} для филиала: {branch}")
+    return env_key
 
 def load_csv_from_url(url: str) -> List[Dict]:
     """Загрузить CSV файл по URL"""
@@ -350,12 +353,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         branch = user_states[user_id].get('branch')
         network = user_states[user_id].get('network')
         
+        logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
+        
         # Загружаем данные филиала
         env_key = get_env_key_for_branch(branch, network)
         csv_url = os.environ.get(env_key)
         
+        logger.info(f"URL из переменной {env_key}: {csv_url}")
+        
         if not csv_url:
-            await update.message.reply_text(f"❌ Данные для филиала {branch} не найдены")
+            # Показываем все доступные переменные окружения для отладки
+            available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
+            logger.error(f"Доступные переменные для {network}: {available_vars}")
+            await update.message.reply_text(
+                f"❌ Данные для филиала {branch} не найдены\n"
+                f"Искали переменную: {env_key}\n"
+                f"Доступные: {', '.join(available_vars[:5])}"
+            )
             return
         
         data = load_csv_from_url(csv_url)

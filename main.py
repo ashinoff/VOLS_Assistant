@@ -252,7 +252,7 @@ def handle_location(message):
     lat, lon = message.location.latitude, message.location.longitude
     tp, vl = state['selected_tp'], state['selected_vl']
     group, branch = state['group'], state['branch']
-    info = rk_branches[branch] if group == 'RK' else ug_branches[branch']
+    info = rk_branches[branch] if group == 'RK' else ug_branches[branch]
     url_sp = os.getenv(info['key'] + '_URL_' + group + '_SP')
     df_sp = load_csv(url_sp)
     row = df_sp[(df_sp['Наименование ТП'] == tp) & (df_sp['Наименование ВЛ'] == vl)].iloc[0]

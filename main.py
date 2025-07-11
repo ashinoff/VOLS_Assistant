@@ -8,6 +8,9 @@ import os
 from datetime import datetime
 import openpyxl
 from flask import Flask, request, abort
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv()
 bot = telebot.TeleBot(os.getenv('TELEGRAM_TOKEN'))
@@ -45,10 +48,19 @@ ug_notifications = []
 user_state = {}
 
 def load_csv(url):
-    return pd.read_csv(StringIO(requests.get(url).text))
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return pd.read_csv(StringIO(response.text), encoding='utf-8')
+    except Exception as e:
+        logging.error(f"Error loading CSV from {url}: {e}")
+        return pd.DataFrame()
 
 def get_user_zone(user_id):
     zones_df = load_csv(ZONES_URL)
+    if zones_df.empty:
+        return None
+    zones_df['Telegram ID'] = pd.to_numeric(zones_df['Telegram ID'], errors='coerce')
     user_row = zones_df[zones_df['Telegram ID'] == user_id]
     return user_row.iloc[0] if not user_row.empty else None
 
@@ -57,17 +69,21 @@ def build_main_keyboard(vis, fil, res):
     if vis == 'All':
         markup.add("РОССЕТИ ЮГ", "РОССЕТИ КУБАНЬ", "ТЕЛЕФОНЫ КОНТРАГЕНТОВ", "ОТЧЕТЫ", "СПРАВКА")
     elif vis == 'RK':
+        branches_dict = rk_branches
         if fil == 'All':
             markup.add("РОССЕТИ КУБАНЬ", "ТЕЛЕФОНЫ КОНТРАГЕНТОВ", "ОТЧЕТЫ", "СПРАВКА")
         else:
-            markup.add(fil + " ЭС" if " ЭС" not in fil else fil, "ТЕЛЕФОНЫ КОНТРАГЕНТОВ")
+            branch = next(k for k, v in branches_dict.items() if v['filial'] == fil)
+            markup.add(branch, "ТЕЛЕФОНЫ КОНТРАГЕНТОВ")
             if res == 'All': markup.add("ОТЧЕТЫ")
             markup.add("СПРАВКА")
     elif vis == 'UG':
+        branches_dict = ug_branches
         if fil == 'All':
             markup.add("РОССЕТИ ЮГ", "ТЕЛЕФОНЫ КОНТРАГЕНТОВ", "ОТЧЕТЫ", "СПРАВКА")
         else:
-            markup.add(fil + " ЭС" if " ЭС" not in fil else fil, "ТЕЛЕФОНЫ КОНТРАГЕНТОВ")
+            branch = next(k for k, v in branches_dict.items() if v['filial'] == fil)
+            markup.add(branch, "ТЕЛЕФОНЫ КОНТРАГЕНТОВ")
             if res == 'All': markup.add("ОТЧЕТЫ")
             markup.add("СПРАВКА")
     return markup
@@ -75,11 +91,17 @@ def build_main_keyboard(vis, fil, res):
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
-    zone = get_user_zone(user_id)
-    if zone is None:
-        bot.send_message(message.chat.id, "Нет доступа.")
-        return
-    bot.send_message(message.chat.id, "Добро пожаловать!", reply_markup=build_main_keyboard(zone['Видимость'], zone['Филиал'], zone['РЭС']))
+    logging.info(f"User {user_id} sent /start")
+    try:
+        zone = get_user_zone(user_id)
+        if zone is None:
+            logging.info(f"No access for user {user_id}")
+            bot.send_message(message.chat.id, "Нет доступа.")
+            return
+        bot.send_message(message.chat.id, "Добро пожаловать!", reply_markup=build_main_keyboard(zone['Видимость'], zone['Филиал'], zone['РЭС']))
+    except Exception as e:
+        logging.error(f"Error in start for user {user_id}: {e}")
+        bot.send_message(message.chat.id, "Ошибка запуска.")
 
 @bot.message_handler(func=lambda m: True)
 def handle_text(message):
@@ -94,9 +116,14 @@ def handle_text(message):
             norm_input = ''.join(c.lower() for c in text if c.isalnum())
             group = state['group']
             branch = state['branch']
-            info = rk_branches[branch] if group == 'RK' else ug_branches[branch]
+            branches_dict = rk_branches if group == 'RK' else ug_branches
+            info = branches_dict[branch]
             url = os.getenv(info['key'] + '_URL_' + group)
             df = load_csv(url)
+            if df.empty:
+                bot.send_message(message.chat.id, "Ошибка данных.")
+                del state['stage']
+                return
             df['norm_tp'] = df['Наименование ТП'].apply(lambda x: ''.join(c.lower() for c in str(x) if c.isalnum()))
             matching = df[df['norm_tp'].str.contains(norm_input)]
             tps = matching['Наименование ТП'].unique()
@@ -115,9 +142,14 @@ def handle_text(message):
             norm_input = ''.join(c.lower() for c in text if c.isalnum())
             group = state['group']
             branch = state['branch']
-            info = rk_branches[branch] if group == 'RK' else ug_branches[branch]
+            branches_dict = rk_branches if group == 'RK' else ug_branches
+            info = branches_dict[branch]
             url = os.getenv(info['key'] + '_URL_' + group + '_SP')
             df = load_csv(url)
+            if df.empty:
+                bot.send_message(message.chat.id, "Ошибка данных.")
+                del state['stage']
+                return
             df['norm_tp'] = df['Наименование ТП'].apply(lambda x: ''.join(c.lower() for c in str(x) if c.isalnum()))
             matching = df[df['norm_tp'].str.contains(norm_input)]
             tps = matching['Наименование ТП'].unique()
@@ -133,17 +165,24 @@ def handle_text(message):
             user_state[user_id] = state
             return
     if text in ["РОССЕТИ КУБАНЬ", "РОССЕТИ ЮГ"]:
-        branches = rk_branches if text == "РОССЕТИ КУБАНЬ" else ug_branches
         group = 'RK' if text == "РОССЕТИ КУБАНЬ" else 'UG'
+        branches = rk_branches if group == "RK" else ug_branches
         if (vis == 'All' or vis == group) and fil == 'All':
             markup = ReplyKeyboardMarkup(resize_keyboard=True)
             for b in branches:
                 markup.add(b)
             markup.add("Назад")
             bot.send_message(message.chat.id, "Выберите филиал", reply_markup=markup)
+            user_state[user_id] = {'group': group}
     elif text in rk_branches or text in ug_branches:
-        group = 'RK' if text in rk_branches else 'UG'
-        info = rk_branches[text] if group == 'RK' else ug_branches[text]
+        if user_id in user_state and 'group' in user_state[user_id]:
+            group = user_state[user_id]['group']
+        else:
+            group = vis
+        branches_dict = rk_branches if group == 'RK' else ug_branches
+        if text not in branches_dict:
+            return
+        info = branches_dict[text]
         if (vis == 'All' or vis == group) and (fil == 'All' or fil == info['filial']):
             markup = ReplyKeyboardMarkup(resize_keyboard=True)
             markup.add("Поиск по ТП", "Отправить уведомление", "Справка", "Назад")
@@ -197,10 +236,16 @@ def handle_text(message):
         bot.send_message(message.chat.id, "Выберите", reply_markup=markup)
     elif text == "Форма доп соглашения":
         url = os.getenv('DOP_SOG_URL')
-        bot.send_document(message.chat.id, url)
+        if url:
+            bot.send_document(message.chat.id, url)
+        else:
+            bot.send_message(message.chat.id, "Ссылка не найдена.")
     elif text == "Форма претензии":
         url = os.getenv('PRETENSII_URL')
-        bot.send_document(message.chat.id, url)
+        if url:
+            bot.send_document(message.chat.id, url)
+        else:
+            bot.send_message(message.chat.id, "Ссылка не найдена.")
     elif text == "ТЕЛЕФОНЫ КОНТРАГЕНТОВ":
         bot.send_message(message.chat.id, "В разработке.")
     elif text == "Назад":
@@ -214,7 +259,8 @@ def handle_callback(call):
     state = user_state.get(user_id, {})
     group = state.get('group')
     branch = state.get('branch')
-    info = rk_branches.get(branch, {}) if group == 'RK' else ug_branches.get(branch, {})
+    branches_dict = rk_branches if group == 'RK' else ug_branches
+    info = branches_dict.get(branch, {})
     if data.startswith('search_tp_'):
         tp = data[10:]
         url = os.getenv(info['key'] + '_URL_' + group)
@@ -252,10 +298,13 @@ def handle_location(message):
     lat, lon = message.location.latitude, message.location.longitude
     tp, vl = state['selected_tp'], state['selected_vl']
     group, branch = state['group'], state['branch']
-    info = rk_branches[branch] if group == 'RK' else ug_branches[branch]
+    branches_dict = rk_branches if group == 'RK' else ug_branches
+    info = branches_dict[branch]
     url_sp = os.getenv(info['key'] + '_URL_' + group + '_SP')
     df_sp = load_csv(url_sp)
-    row = df_sp[(df_sp['Наименование ТП'] == tp) & (df_sp['Наименование ВЛ'] == vl)].iloc[0]
+    matching = df_sp[(df_sp['Наименование ТП'] == tp) & (df_sp['Наименование ВЛ'] == vl)]
+    if matching.empty: return
+    row = matching.iloc[0]
     filial_sp, res_sp = row['Филиал'], row['РЭС']
     zones_df = load_csv(ZONES_URL)
     resp_ids = zones_df[zones_df['Ответственный'].isin([filial_sp, res_sp])]['Telegram ID'].unique()
@@ -298,5 +347,5 @@ if __name__ == '__main__':
     import time
     bot.remove_webhook()
     time.sleep(0.1)
-    bot.set_webhook(url=os.getenv('WEBHOOK_URL'))  # Укажите WEBHOOK_URL в env, напр. https://your-render-app.onrender.com/
+    bot.set_webhook(url=os.getenv('WEBHOOK_URL'))
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', 5000)))

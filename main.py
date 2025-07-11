@@ -607,49 +607,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if doc_url:
                 try:
-                    # Определяем тип файла по URL
+                    # Для Google Docs/Sheets - даем прямые ссылки на экспорт
                     if 'docs.google.com/document' in doc_url:
-                        # Google Docs - отправляем как PDF
-                        pdf_url = doc_url.replace('/edit', '/export?format=pdf')
-                        await update.message.reply_document(
-                            document=pdf_url,
-                            filename=f"{doc_name}.pdf",
-                            caption=f"📄 {doc_name}"
-                        )
-                    elif 'docs.google.com/spreadsheets' in doc_url:
-                        # Google Sheets - отправляем как Excel
-                        xlsx_url = doc_url.replace('/edit', '/export?format=xlsx')
-                        await update.message.reply_document(
-                            document=xlsx_url,
-                            filename=f"{doc_name}.xlsx",
-                            caption=f"📊 {doc_name}"
-                        )
-                    elif 'drive.google.com' in doc_url:
-                        # Прямая ссылка на файл в Google Drive
-                        # Преобразуем в прямую ссылку для скачивания
-                        if '/file/d/' in doc_url:
-                            file_id = doc_url.split('/file/d/')[1].split('/')[0]
-                            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                            await update.message.reply_document(
-                                document=direct_url,
-                                caption=f"📄 {doc_name}"
+                        # Извлекаем ID документа
+                        doc_id = doc_url.split('/d/')[1].split('/')[0] if '/d/' in doc_url else None
+                        if doc_id:
+                            # Прямая ссылка на скачивание PDF
+                            pdf_url = f"https://docs.google.com/document/d/{doc_id}/export?format=pdf"
+                            await update.message.reply_text(
+                                f"📄 {doc_name}\n\n"
+                                f"Скачать PDF: {pdf_url}\n\n"
+                                f"Открыть в браузере: {doc_url}"
                             )
                         else:
                             await update.message.reply_text(
                                 f"📄 {doc_name}\n\n"
-                                f"Ссылка для скачивания:\n{doc_url}"
+                                f"Ссылка: {doc_url}"
+                            )
+                    
+                    elif 'docs.google.com/spreadsheets' in doc_url:
+                        # Извлекаем ID таблицы
+                        doc_id = doc_url.split('/d/')[1].split('/')[0] if '/d/' in doc_url else None
+                        if doc_id:
+                            # Прямая ссылка на скачивание Excel
+                            xlsx_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=xlsx"
+                            await update.message.reply_text(
+                                f"📊 {doc_name}\n\n"
+                                f"Скачать Excel: {xlsx_url}\n\n"
+                                f"Открыть в браузере: {doc_url}"
+                            )
+                        else:
+                            await update.message.reply_text(
+                                f"📊 {doc_name}\n\n"
+                                f"Ссылка: {doc_url}"
+                            )
+                    
+                    elif 'drive.google.com' in doc_url:
+                        # Для файлов на Google Drive
+                        if '/file/d/' in doc_url:
+                            file_id = doc_url.split('/file/d/')[1].split('/')[0]
+                            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+                            await update.message.reply_text(
+                                f"📄 {doc_name}\n\n"
+                                f"Скачать файл: {direct_url}\n\n"
+                                f"Открыть в браузере: {doc_url}"
+                            )
+                        else:
+                            await update.message.reply_text(
+                                f"📄 {doc_name}\n\n"
+                                f"Ссылка: {doc_url}"
                             )
                     else:
-                        # Другие ссылки - просто отправляем
+                        # Для других ссылок
                         await update.message.reply_text(
                             f"📄 {doc_name}\n\n"
-                            f"Ссылка для скачивания:\n{doc_url}"
+                            f"Ссылка: {doc_url}"
                         )
+                        
                 except Exception as e:
-                    logger.error(f"Ошибка отправки документа {doc_name}: {e}")
+                    logger.error(f"Ошибка обработки документа {doc_name}: {e}")
                     await update.message.reply_text(
-                        f"❌ Не удалось отправить документ\n"
-                        f"Попробуйте скачать по ссылке:\n{doc_url}"
+                        f"📄 {doc_name}\n\n"
+                        f"Ссылка: {doc_url}"
                     )
             else:
                 await update.message.reply_text(f"❌ Документ не найден")

@@ -6,26 +6,21 @@ from config import ZONES_CSV_URL
 def get_zones_df():
     r = requests.get(ZONES_CSV_URL)
     r.raise_for_status()
-    # попробуем оба варианта разделителя
-    try:
-        df = pd.read_csv(io.StringIO(r.text), sep='\t')
-        if len(df.columns) == 1:  # не сработала табуляция
-            df = pd.read_csv(io.StringIO(r.text), sep=',')
-    except Exception:
-        df = pd.read_csv(io.StringIO(r.text), sep=',')
-    df.columns = df.columns.str.strip()
-    print("Заголовки:", df.columns.tolist())  # убери после отладки
+    df = pd.read_csv(io.StringIO(r.text), sep=None, engine='python')
+    # Выведи все заголовки в лог, чтобы точно видеть их
+    print("Заголовки в df.columns:", df.columns.tolist())
     return df
 
 def get_user_rights(telegram_id: int):
     df = get_zones_df()
-    # Попробуем вывести все названия для ручного сопоставления
+    # Останови выполнение, чтобы увидеть заголовки (убери return None — только для диагностики!)
     if 'Telegram ID' not in df.columns:
         raise Exception(f"Нет столбца 'Telegram ID'. Заголовки: {df.columns.tolist()}")
-    user_row = df[df['Telegram ID'] == telegram_id]
+    user_row = df[df['Telegram ID'].astype(str) == str(telegram_id)]
     if user_row.empty:
         return None
     row = user_row.iloc[0]
+    # То же самое для всех остальных — если падает на другом столбце, сразу будет видно
     return {
         "zone": row['Видимость'],
         "filial": row['Филиал'],

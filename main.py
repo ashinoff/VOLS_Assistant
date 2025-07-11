@@ -175,7 +175,7 @@ async def tp_select_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         vl_list = sel['Наименование ВЛ'].unique()
         buttons = [[InlineKeyboardButton(vl, callback_data=f"vl_sel|{tp}|{vl}")] for vl in vl_list]
-        buttons.append([InlineKeyboardButton('Назад', callback_data=f'branch_{context.user_data['net']}|{context.user_data['branch']}')])
+        buttons.append([InlineKeyboardButton('Назад', callback_data=f"branch_{context.user_data['net']}|{context.user_data['branch']}")])
         await cb.edit_message_text('Выберите ВЛ:', reply_markup=InlineKeyboardMarkup(buttons))
         context.user_data['sel_row'] = sel.iloc[0]
 

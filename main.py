@@ -1,18 +1,14 @@
 import os
-import logging
 import requests
 import pandas as pd
 import io
-from flask import Flask, request
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 TOKEN = os.getenv("TOKEN", "YOUR_TOKEN")
 ZONES_CSV_URL = os.getenv("ZONES_CSV_URL", "https://docs.google.com/....")
-
-# ---- ПОЛУЧЕНИЕ ТАБЛИЦЫ, ПРОВЕРКА СТОЛБЦОВ ----
+PORT = int(os.getenv("PORT", 8000))
+SELF_URL = os.getenv("SELF_URL", "https://vols-assistant.onrender.com")
 
 def get_zones_df():
     r = requests.get(ZONES_CSV_URL)
@@ -23,16 +19,14 @@ def get_zones_df():
 
 def get_user_rights(telegram_id: int):
     df = get_zones_df()
-    print("ПРОВЕРКА ПЕРВЫХ СТРОК:", df.head(1).to_dict())
     try:
         user_row = df[df['Telegram ID'] == telegram_id]
-    except KeyError as e:
-        print("ОШИБКА: Нет колонки Telegram ID")
+    except KeyError:
+        print("Нет колонки Telegram ID")
         return None
     if user_row.empty:
         return None
     row = user_row.iloc[0]
-    # Безопасно получаем, даже если столбец пустой
     return {
         "zone": row.get('Видимость', ''),
         "filial": row.get('Филиал', ''),
@@ -40,10 +34,6 @@ def get_user_rights(telegram_id: int):
         "fio": row.get('ФИО', ''),
         "responsible": row.get('Ответственный', ''),
     }
-
-# ---- TELEGRAM ----
-
-application = ApplicationBuilder().token(TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -57,31 +47,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
           f"РЭС: {rights['res']}"
     await update.message.reply_text(msg)
 
-application.add_handler(CommandHandler("start", start))
-
-# ---- FLASK ----
-
-app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "OK"
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        application.create_task(application.process_update(update))
-        return "ok"
-    return "Only POST"
-
-# ---- УСТАНОВКА ВЕБХУКА ----
-
-def set_webhook():
-    url = os.getenv("SELF_URL", "https://vols-assistant.onrender.com") + "/webhook"
-    application.bot.set_webhook(url)
-    print("Webhook set:", url)
-
 if __name__ == "__main__":
-    set_webhook()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    app = ApplicationBuilder().token(TOKEN).webhook_url(f"{SELF_URL}/webhook").port(PORT).build()
+    app.add_handler(CommandHandler("start", start))
+    print("СТАРТ telegram-бота на порту", PORT)
+    app.run_webhook(listen="0.0.0.0", port=PORT, webhook_url=f"{SELF_URL}/webhook")

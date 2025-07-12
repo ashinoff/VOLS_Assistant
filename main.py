@@ -1249,7 +1249,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("checkuser", check_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    application.add_error_handler(error_handler)
+    # application.add_error_handler(error_handler)  # Временно отключено
     
     # Загружаем данные пользователей
     load_users_data()

@@ -10,16 +10,21 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import pandas as pd
 from io import BytesIO
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Константы
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
-PORT = int(os.environ.get('PORT', 5000))
-ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
+# Email настройки
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.yandex.ru')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_EMAIL = os.environ.get('SMTP_EMAIL')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 
 # Списки филиалов
 ROSSETI_KUBAN_BRANCHES = [
@@ -44,6 +49,12 @@ user_states = {}
 
 # Кеш данных пользователей
 users_cache = {}
+
+# Настройки email уведомлений пользователей
+user_email_settings = {}
+
+# Последние сгенерированные отчеты
+last_reports = {}
 
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
@@ -190,6 +201,9 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     # Справка
     keyboard.append(['ℹ️ СПРАВКА'])
     
+    # Персональные настройки
+    keyboard.append(['⚙️ МОИ НАСТРОЙКИ'])
+    
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_branch_keyboard(branches: List[str]) -> ReplyKeyboardMarkup:
@@ -250,7 +264,34 @@ REFERENCE_DOCS = {
     'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
 }
 
-def get_reference_keyboard() -> ReplyKeyboardMarkup:
+def get_settings_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура персональных настроек"""
+    keyboard = [
+        ['📧 Мои email уведомления'],
+        ['📨 Отправить последний отчет на почту'],
+        ['📄 Получить все документы на почту'],
+        ['ℹ️ Моя информация'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_email_settings_keyboard(user_data: Dict) -> ReplyKeyboardMarkup:
+    """Клавиатура настроек email"""
+    email = user_data.get('email', '')
+    email_enabled = user_data.get('email_enabled', True)
+    
+    keyboard = []
+    
+    if email:
+        status = "✅ Включены" if email_enabled else "❌ Выключены"
+        keyboard.append([f'📧 Email уведомления: {status}'])
+        keyboard.append(['🔄 Изменить статус уведомлений'])
+        keyboard.append([f'📮 Текущий email: {email}'])
+    else:
+        keyboard.append(['❌ Email не указан в системе'])
+    
+    keyboard.append(['⬅️ Назад'])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     """Клавиатура справки с документами"""
     keyboard = []
     
@@ -390,6 +431,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "Выберите документ",
                 reply_markup=get_reference_keyboard()
+            )
+        
+        elif text == '⚙️ МОИ НАСТРОЙКИ':
+            user_states[user_id] = {'state': 'settings'}
+            await update.message.reply_text(
+                "⚙️ Персональные настройки",
+                reply_markup=get_settings_keyboard()
             )
         
         elif text == '📞 ТЕЛЕФОНЫ КОНТРАГЕНТОВ':
@@ -570,8 +618,123 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
     
-    # Отчеты
-    elif state == 'reports':
+    # Персональные настройки
+    elif state == 'settings':
+        if text == '📧 Мои email уведомления':
+            user_states[user_id]['state'] = 'email_settings'
+            user_data = users_cache.get(user_id, {})
+            await update.message.reply_text(
+                "📧 Настройки email уведомлений",
+                reply_markup=get_email_settings_keyboard(user_data)
+            )
+        
+        elif text == '📨 Отправить последний отчет на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            # Ищем последний отчет пользователя
+            last_report = last_reports.get(user_id)
+            
+            if last_report:
+                report_data = last_report['data']
+                report_name = last_report['filename']
+                report_type = last_report['type']
+                
+                subject = f"Отчет: {report_name}"
+                body = f"""Добрый день, {user_data.get('name', '')}!
+
+По вашему запросу направляем последний сформированный отчет.
+
+Тип отчета: {report_type}
+Дата формирования: {last_report['datetime']}
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                report_data.seek(0)
+                if await send_email(user_email, subject, body, report_data, report_name):
+                    await update.message.reply_text(f"✅ Отчет отправлен на {user_email}")
+                else:
+                    await update.message.reply_text("❌ Ошибка отправки отчета")
+            else:
+                await update.message.reply_text("❌ У вас пока нет сформированных отчетов")
+        
+        elif text == '📄 Получить все документы на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            # Собираем все доступные документы
+            available_docs = []
+            for doc_name, doc_url in REFERENCE_DOCS.items():
+                if doc_url:
+                    available_docs.append(f"• {doc_name}: {doc_url}")
+            
+            if available_docs:
+                subject = "Справочные документы ВОЛС"
+                body = f"""Добрый день, {user_data.get('name', '')}!
+
+По вашему запросу направляем ссылки на все справочные документы:
+
+{chr(10).join(available_docs)}
+
+Для скачивания документов перейдите по соответствующим ссылкам.
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                if await send_email(user_email, subject, body):
+                    await update.message.reply_text(
+                        f"✅ Ссылки на все документы отправлены на {user_email}\n"
+                        f"📄 Всего документов: {len(available_docs)}"
+                    )
+                else:
+                    await update.message.reply_text("❌ Ошибка отправки документов")
+            else:
+                await update.message.reply_text("❌ Нет доступных документов")
+        
+        elif text == 'ℹ️ Моя информация':
+            user_data = users_cache.get(user_id, {})
+            email = user_data.get('email', 'Не указан')
+            email_status = "✅ Включены" if user_email_settings.get(user_id, {}).get('enabled', True) else "❌ Выключены"
+            
+            info_text = f"""ℹ️ Ваша информация:
+
+👤 ФИО: {user_data.get('name', 'Не указано')}
+🆔 Telegram ID: {user_id}
+📧 Email: {email}
+📬 Email уведомления: {email_status}
+
+🔐 Права доступа:
+• Видимость: {user_data.get('visibility', '-')}
+• Филиал: {user_data.get('branch', '-')}
+• РЭС: {user_data.get('res', '-')}
+• Ответственность: {user_data.get('responsible', 'Не назначена')}"""
+            
+            await update.message.reply_text(info_text)
+    
+    # Настройки email
+    elif state == 'email_settings':
+        if text == '🔄 Изменить статус уведомлений':
+            current_status = user_email_settings.get(user_id, {}).get('enabled', True)
+            new_status = not current_status
+            
+            if user_id not in user_email_settings:
+                user_email_settings[user_id] = {}
+            user_email_settings[user_id]['enabled'] = new_status
+            
+            status_text = "включены" if new_status else "выключены"
+            await update.message.reply_text(
+                f"✅ Email уведомления {status_text}",
+                reply_markup=get_email_settings_keyboard(users_cache.get(user_id, {}))
+            )
         if text == '📊 Уведомления РОССЕТИ КУБАНЬ':
             await generate_report(update, context, 'RK', permissions)
         elif text == '📊 Уведомления РОССЕТИ ЮГ':
@@ -664,6 +827,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"📄 {doc_name}\n\n"
                             f"Ссылка: {doc_url}"
                         )
+                    
+                    # Отправляем на email если указан и включены уведомления
+                    user_id = str(update.effective_user.id)
+                    user_data = users_cache.get(user_id, {})
+                    user_email = user_data.get('email', '')
+                    email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
+                    
+                    if user_email and email_enabled:
+                        subject = f"Документ: {doc_name}"
+                        body = f"""Добрый день!
+
+Вы запросили документ "{doc_name}" через бот ВОЛС Ассистент.
+
+Ссылка для скачивания: {doc_url}
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                        
+                        if await send_email(user_email, subject, body):
+                            await update.message.reply_text(f"📧 Ссылка также отправлена на {user_email}")
                         
                 except Exception as e:
                     logger.error(f"Ошибка обработки документа {doc_name}: {e}")
@@ -909,7 +1092,7 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
     
     output.seek(0)
     
-    # Отправляем файл
+    # Отправляем файл в чат
     network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
     filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     
@@ -918,8 +1101,84 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         filename=filename,
         caption=f"📊 Отчет по уведомлениям {network_name}"
     )
+    
+    # Сохраняем последний отчет пользователя
+    output.seek(0)
+    last_reports[user_id] = {
+        'data': BytesIO(output.read()),
+        'filename': filename,
+        'type': f"Уведомления {network_name}",
+        'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
+    }
+    
+    # Отправляем на email если указан и включены уведомления
+    user_data = users_cache.get(user_id, {})
+    user_email = user_data.get('email', '')
+    email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
+    
+    if user_email and email_enabled:
+        output.seek(0)
+        subject = f"Отчет по уведомлениям {network_name}"
+        body = f"""Добрый день!
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+Направляем вам отчет по уведомлениям {network_name} от {datetime.now().strftime('%d.%m.%Y %H:%M')}.
+
+Всего уведомлений в отчете: {len(df)}
+
+С уважением,
+Бот ВОЛС Ассистент"""
+        
+        if await send_email(user_email, subject, body, output, filename):
+            await update.message.reply_text(f"📧 Отчет также отправлен на {user_email}")
+        else:
+            await update.message.reply_text("⚠️ Не удалось отправить отчет на email")
+
+async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
+    """Отправка email через SMTP"""
+    if not SMTP_EMAIL or not SMTP_PASSWORD:
+        logger.error("Email настройки не заданы")
+        return False
+    
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Добавляем текст
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Добавляем вложение если есть
+        if attachment_data and attachment_name:
+            attachment_data.seek(0)
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(attachment_data.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename={attachment_name}')
+            msg.attach(part)
+        
+        # Отправляем (разная логика для разных портов)
+        if SMTP_PORT == 465:
+            # SSL соединение (Mail.ru)
+            import ssl
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            # TLS соединение (Яндекс, Gmail)
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        
+        logger.info(f"Email отправлен на {to_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки email: {e}")
+        return False
     """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}")
 

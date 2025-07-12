@@ -542,7 +542,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
                 "🔍 Введите наименование ТП для поиска\n"
-                "Примеры: Н-6477, 6-47, 6477, 477",
+                "Введите точное или примерное название ТП",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         
@@ -552,7 +552,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
                 "📨 Введите наименование ТП для уведомления\n"
-                "Примеры: Н-6477, 6-47, 6477, 477",
+                "Введите точное или примерное название ТП",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         
@@ -570,6 +570,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
         
+        # Показываем анимированное сообщение
+        search_messages = [
+            "🔍 Ищу информацию...",
+            "📡 Подключаюсь к базе данных...",
+            "⚡ Сканирую электросети...",
+            "📊 Анализирую данные...",
+            "🔄 Обрабатываю результаты..."
+        ]
+        
+        # Отправляем первое сообщение
+        loading_msg = await update.message.reply_text(search_messages[0])
+        
+        # Анимация поиска
+        for i, msg_text in enumerate(search_messages[1:], 1):
+            await asyncio.sleep(0.5)  # Задержка между сообщениями
+            try:
+                await loading_msg.edit_text(msg_text)
+            except Exception:
+                pass  # Игнорируем ошибки редактирования
+        
         # Загружаем данные филиала
         env_key = get_env_key_for_branch(branch, network)
         csv_url = os.environ.get(env_key)
@@ -580,6 +600,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Показываем все доступные переменные окружения для отладки
             available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
             logger.error(f"Доступные переменные для {network}: {available_vars}")
+            await loading_msg.delete()
             await update.message.reply_text(
                 f"❌ Данные для филиала {branch} не найдены\n"
                 f"Искали переменную: {env_key}\n"
@@ -589,6 +610,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = load_csv_from_url(csv_url)
         results = search_tp_in_data(text, data, 'Наименование ТП')
+        
+        # Удаляем анимированное сообщение
+        await loading_msg.delete()
         
         if not results:
             await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
@@ -611,7 +635,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['action'] = 'select_tp'
             
             await update.message.reply_text(
-                f"Найдено {len(tp_list)} ТП. Выберите нужную:",
+                f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
     
@@ -629,16 +653,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         branch = user_states[user_id].get('branch')
         network = user_states[user_id].get('network')
         
+        # Показываем анимированное сообщение
+        notification_messages = [
+            "🔍 Поиск в справочнике...",
+            "📋 Проверяю базу данных...",
+            "🌐 Загружаю информацию...",
+            "✨ Почти готово..."
+        ]
+        
+        loading_msg = await update.message.reply_text(notification_messages[0])
+        
+        for msg_text in notification_messages[1:]:
+            await asyncio.sleep(0.4)
+            try:
+                await loading_msg.edit_text(msg_text)
+            except Exception:
+                pass
+        
         # Загружаем справочник
         env_key = get_env_key_for_branch(branch, network, is_reference=True)
         csv_url = os.environ.get(env_key)
         
         if not csv_url:
+            await loading_msg.delete()
             await update.message.reply_text(f"❌ Справочник для филиала {branch} не найден")
             return
         
         data = load_csv_from_url(csv_url)
         results = search_tp_in_data(text, data, 'Наименование ТП')
+        
+        await loading_msg.delete()
         
         if not results:
             await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
@@ -656,7 +700,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id]['action'] = 'select_notification_tp'
         
         await update.message.reply_text(
-            f"Найдено {len(tp_list)} ТП. Выберите нужную:",
+            f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
     
@@ -1212,6 +1256,24 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
             await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
             return
         
+        # Показываем анимированное сообщение
+        report_messages = [
+            "📊 Собираю данные...",
+            "📈 Формирую статистику...",
+            "📝 Создаю таблицы...",
+            "🎨 Оформляю отчет...",
+            "💾 Сохраняю файл..."
+        ]
+        
+        loading_msg = await update.message.reply_text(report_messages[0])
+        
+        for msg_text in report_messages[1:]:
+            await asyncio.sleep(0.5)
+            try:
+                await loading_msg.edit_text(msg_text)
+            except Exception:
+                pass
+        
         # Создаем DataFrame
         df = pd.DataFrame(notifications)
         
@@ -1220,6 +1282,7 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         existing_columns = [col for col in required_columns if col in df.columns]
         
         if not existing_columns:
+            await loading_msg.delete()
             await update.message.reply_text("📊 Недостаточно данных для формирования отчета")
             return
             
@@ -1270,6 +1333,9 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         # ВАЖНО: Перемещаем указатель в начало после записи
         output.seek(0)
         
+        # Удаляем анимированное сообщение
+        await loading_msg.delete()
+        
         # Отправляем файл в чат
         network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
         filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
@@ -1300,6 +1366,8 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
                 
     except Exception as e:
         logger.error(f"Ошибка генерации отчета: {e}")
+        if 'loading_msg' in locals():
+            await loading_msg.delete()
         await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
 
 async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):

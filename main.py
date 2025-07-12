@@ -1210,4 +1210,81 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
             import ssl
             context = ssl.create_default_context()
             with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
-                server.login(SMTP_EMAIL, SMTP_
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            # TLS соединение (Яндекс, Gmail)
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        
+        logger.info(f"Email отправлен на {to_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки email: {e}")
+        return False
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Попытаемся уведомить пользователя об ошибке
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
+            )
+    except Exception:
+        pass
+
+async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка доступности пользователя для отправки сообщений"""
+    if len(context.args) == 0:
+        await update.message.reply_text("Использование: /checkuser <telegram_id>")
+        return
+    
+    target_id = context.args[0]
+    
+    try:
+        # Пытаемся получить информацию о чате
+        chat = await context.bot.get_chat(chat_id=target_id)
+        await update.message.reply_text(
+            f"✅ Пользователь доступен\n"
+            f"ID: {target_id}\n"
+            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
+            f"Username: @{chat.username or 'нет'}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
+            f"Ошибка: {str(e)}\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь не начал диалог с ботом\n"
+            f"• Пользователь заблокировал бота\n"
+            f"• Неверный ID"
+        )
+
+if __name__ == '__main__':
+    # Создаем приложение
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("checkuser", check_user))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_error_handler(error_handler)
+    
+    # Загружаем данные пользователей
+    load_users_data()
+    
+    # Запускаем webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True
+    )

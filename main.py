@@ -405,6 +405,14 @@ def get_report_action_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+def get_after_search_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура после результатов поиска"""
+    keyboard = [
+        ['🔍 Новый поиск'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user_id = str(update.effective_user.id)
@@ -415,6 +423,733 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not permissions['visibility']:
         await update.message.reply_text(
+            "✅ Фото получено!\n\n"
+            "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправить уведомление ответственным лицам"""
+    user_id = str(update.effective_user.id)
+    user_data = user_states.get(user_id, {})
+    
+    # Получаем данные отправителя
+    sender_info = get_user_permissions(user_id)
+    
+    # Получаем данные уведомления
+    tp_data = user_data.get('tp_data', {})
+    selected_tp = user_data.get('selected_tp')
+    selected_vl = user_data.get('selected_vl')
+    location = user_data.get('location', {})
+    photo_id = user_data.get('photo_id')
+    comment = user_data.get('comment', '')
+    
+    # Получаем данные из справочника (колонки A и B)
+    branch_from_reference = tp_data.get('Филиал', '').strip()  # Колонка A
+    res_from_reference = tp_data.get('РЭС', '').strip()  # Колонка B
+    
+    branch = user_data.get('branch')
+    network = user_data.get('network')
+    
+    # Показываем анимированное сообщение отправки
+    sending_messages = [
+        "📨 Подготовка уведомления...",
+        "🔍 Поиск ответственных лиц...",
+        "📤 Отправка уведомлений...",
+        "📧 Отправка email...",
+        "✅ Почти готово..."
+    ]
+    
+    loading_msg = await update.message.reply_text(sending_messages[0])
+    
+    for msg_text in sending_messages[1:]:
+        await asyncio.sleep(0.5)
+        try:
+            await loading_msg.edit_text(msg_text)
+        except Exception:
+            pass
+    
+    # Ищем всех ответственных в базе
+    responsible_users = []
+    
+    logger.info(f"Ищем ответственных для:")
+    logger.info(f"  Филиал из справочника: '{branch_from_reference}'")
+    logger.info(f"  РЭС из справочника: '{res_from_reference}'")
+    
+    # Проходим по всем пользователям и проверяем колонку "Ответственный"
+    for uid, udata in users_cache.items():
+        responsible_for = udata.get('responsible', '').strip()
+        
+        if not responsible_for:
+            continue
+            
+        # Проверяем совпадение с филиалом или РЭС из справочника
+        if responsible_for == branch_from_reference or responsible_for == res_from_reference:
+            responsible_users.append({
+                'id': uid,
+                'name': udata.get('name', 'Неизвестный'),
+                'email': udata.get('email', ''),
+                'responsible_for': responsible_for
+            })
+            logger.info(f"Найден ответственный: {udata.get('name')} (ID: {uid}) - отвечает за '{responsible_for}'")
+    
+    # Формируем текст уведомления
+    notification_text = f"""🚨 НОВОЕ УВЕДОМЛЕНИЕ О БЕЗДОГОВОРНОМ ВОЛС
+
+📍 Филиал: {branch}
+📍 РЭС: {res_from_reference}
+📍 ТП: {selected_tp}
+⚡ ВЛ: {selected_vl}
+
+👤 Отправитель: {sender_info['name']}
+🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
+
+    if location:
+        lat = location.get('latitude')
+        lon = location.get('longitude')
+        notification_text += f"\n📍 Координаты: {lat:.6f}, {lon:.6f}"
+        notification_text += f"\n🗺 [Открыть на карте](https://maps.google.com/?q={lat},{lon})"
+    
+    if comment:
+        notification_text += f"\n\n💬 Комментарий: {comment}"
+    
+    # Формируем список получателей для записи в хранилище
+    recipients_info = ", ".join([f"{u['name']} ({u['id']})" for u in responsible_users]) if responsible_users else "Не найдены"
+    
+    # Сохраняем уведомление в хранилище
+    notification_data = {
+        'branch': branch,
+        'res': res_from_reference,
+        'tp': selected_tp,
+        'vl': selected_vl,
+        'sender_name': sender_info['name'],
+        'sender_id': user_id,
+        'recipient_name': recipients_info,
+        'recipient_id': ", ".join([u['id'] for u in responsible_users]) if responsible_users else 'Не найдены',
+        'datetime': datetime.now().strftime('%d.%m.%Y %H:%M'),
+        'coordinates': f"{location.get('latitude', 0):.6f}, {location.get('longitude', 0):.6f}" if location else 'Не указаны',
+        'comment': comment,
+        'has_photo': bool(photo_id)
+    }
+    
+    notifications_storage[network].append(notification_data)
+    
+    # Обновляем активность пользователя
+    if user_id not in user_activity:
+        user_activity[user_id] = {'last_activity': datetime.now(), 'count': 0}
+    user_activity[user_id]['count'] += 1
+    user_activity[user_id]['last_activity'] = datetime.now()
+    
+    # Отправляем уведомления всем найденным ответственным
+    success_count = 0
+    email_success_count = 0
+    failed_users = []
+    
+    for responsible in responsible_users:
+        try:
+            # Отправляем текст
+            await context.bot.send_message(
+                chat_id=responsible['id'],
+                text=notification_text,
+                parse_mode='Markdown'
+            )
+            
+            # Отправляем локацию
+            if location:
+                await context.bot.send_location(
+                    chat_id=responsible['id'],
+                    latitude=location.get('latitude'),
+                    longitude=location.get('longitude')
+                )
+            
+            # Отправляем фото
+            if photo_id:
+                await context.bot.send_photo(
+                    chat_id=responsible['id'],
+                    photo=photo_id,
+                    caption=f"Фото с {selected_tp}"
+                )
+            
+            success_count += 1
+            
+            # ВСЕГДА отправляем email если есть адрес
+            if responsible['email']:
+                email_subject = f"ВОЛС: Уведомление от {sender_info['name']}"
+                email_body = f"""Добрый день, {responsible['name']}!
+
+Получено новое уведомление о бездоговорном ВОЛС.
+
+Филиал: {branch}
+РЭС: {res_from_reference}
+ТП: {selected_tp}
+ВЛ: {selected_vl}
+
+Отправитель: {sender_info['name']}
+Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
+
+                if location:
+                    lat = location.get('latitude')
+                    lon = location.get('longitude')
+                    email_body += f"\n\nКоординаты: {lat:.6f}, {lon:.6f}"
+                    email_body += f"\nСсылка на карту: https://maps.google.com/?q={lat},{lon}"
+                
+                if comment:
+                    email_body += f"\n\nКомментарий: {comment}"
+                    
+                if photo_id:
+                    email_body += f"\n\nК уведомлению приложено фото (доступно в Telegram)"
+                
+                email_body += f"""
+
+Для просмотра деталей и фотографий откройте Telegram.
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                try:
+                    await send_email(responsible['email'], email_subject, email_body)
+                    email_success_count += 1
+                except Exception as e:
+                    logger.error(f"Ошибка отправки email для {responsible['name']}: {e}")
+                
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления пользователю {responsible['name']} ({responsible['id']}): {e}")
+            failed_users.append(f"{responsible['name']} ({responsible['id']}): {str(e)}")
+    
+    # Удаляем анимированное сообщение
+    await loading_msg.delete()
+    
+    # Формируем результат
+    if responsible_users:
+        if success_count == len(responsible_users):
+            result_text = f"""✅ Уведомления успешно отправлены!
+
+📨 Получатели ({success_count}):"""
+            for responsible in responsible_users:
+                result_text += f"\n• {responsible['name']} (отвечает за {responsible['responsible_for']})"
+                if responsible['email']:
+                    result_text += f" 📧"
+            
+            if email_success_count > 0:
+                result_text += f"\n\n📧 Email отправлено: {email_success_count}"
+        else:
+            result_text = f"""⚠️ Уведомления отправлены частично
+
+✅ Успешно: {success_count} из {len(responsible_users)}
+📧 Email отправлено: {email_success_count}
+
+❌ Ошибки:"""
+            for failed in failed_users:
+                result_text += f"\n• {failed}"
+    else:
+        result_text = f"""❌ Ответственные не найдены
+
+Для данной ТП не назначены ответственные лица.
+Уведомление сохранено в системе и будет доступно в отчетах.
+
+Отладочная информация:
+- Филиал из справочника: "{branch_from_reference}"
+- РЭС из справочника: "{res_from_reference}"
+- Всего пользователей в базе: {len(users_cache)}
+
+Список значений в колонке "Ответственный":"""
+        # Показываем уникальные значения из колонки Ответственный для отладки
+        unique_responsible = set(u.get('responsible', '') for u in users_cache.values() if u.get('responsible'))
+        for resp in list(unique_responsible)[:10]:
+            result_text += f"\n• {resp}"
+        if len(unique_responsible) > 10:
+            result_text += f"\n... и еще {len(unique_responsible) - 10}"
+    
+    # Очищаем состояние
+    user_states[user_id] = {'state': f'branch_{branch}', 'branch': branch, 'network': network}
+    
+    await update.message.reply_text(
+        result_text,
+        reply_markup=get_branch_menu_keyboard()
+    )
+
+async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
+    """Генерация отчета"""
+    try:
+        user_id = str(update.effective_user.id)
+        notifications = notifications_storage[network]
+        
+        if not notifications:
+            await update.message.reply_text("📊 Нет данных для отчета")
+            return
+        
+        # Фильтруем уведомления в зависимости от прав
+        if permissions['branch'] != 'All':
+            notifications = [n for n in notifications if n['branch'] == permissions['branch']]
+        
+        if not notifications:
+            await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
+            return
+        
+        # Показываем анимированное сообщение
+        report_messages = [
+            "📊 Собираю данные...",
+            "📈 Формирую статистику...",
+            "📝 Создаю таблицы...",
+            "🎨 Оформляю отчет...",
+            "💾 Сохраняю файл..."
+        ]
+        
+        loading_msg = await update.message.reply_text(report_messages[0])
+        
+        for msg_text in report_messages[1:]:
+            await asyncio.sleep(0.5)
+            try:
+                await loading_msg.edit_text(msg_text)
+            except Exception:
+                pass
+        
+        # Создаем DataFrame
+        df = pd.DataFrame(notifications)
+        
+        # Проверяем наличие необходимых колонок
+        required_columns = ['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']
+        existing_columns = [col for col in required_columns if col in df.columns]
+        
+        if not existing_columns:
+            await loading_msg.delete()
+            await update.message.reply_text("📊 Недостаточно данных для формирования отчета")
+            return
+            
+        df = df[existing_columns]
+        
+        # Переименовываем колонки
+        column_mapping = {
+            'branch': 'ФИЛИАЛ',
+            'res': 'РЭС', 
+            'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
+            'sender_id': 'ID ОТПРАВИТЕЛЯ',
+            'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
+            'recipient_id': 'ID ПОЛУЧАТЕЛЯ',
+            'datetime': 'ВРЕМЯ ДАТА',
+            'coordinates': 'КООРДИНАТЫ'
+        }
+        df.rename(columns=column_mapping, inplace=True)
+        
+        # Создаем Excel файл
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, sheet_name='Уведомления', index=False)
+            
+            # Форматирование
+            workbook = writer.book
+            worksheet = writer.sheets['Уведомления']
+            
+            # Формат заголовков
+            header_format = workbook.add_format({
+                'bg_color': '#FFE6E6',
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'border': 1
+            })
+            
+            # Применяем формат к заголовкам
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Автоподбор ширины колонок
+            for i, col in enumerate(df.columns):
+                column_len = df[col].astype(str).map(len).max()
+                column_len = max(column_len, len(col)) + 2
+                worksheet.set_column(i, i, column_len)
+        
+        # ВАЖНО: Перемещаем указатель в начало после записи
+        output.seek(0)
+        
+        # Удаляем анимированное сообщение
+        await loading_msg.delete()
+        
+        # Отправляем файл в чат
+        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
+        filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        # Создаем InputFile для правильной отправки
+        await update.message.reply_document(
+            document=InputFile(output, filename=filename),
+            caption=f"📊 Отчет по уведомлениям {network_name}"
+        )
+        
+        # Сохраняем последний отчет пользователя
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Уведомления {network_name}",
+            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий с отчетом
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
+        )
+                
+    except Exception as e:
+        logger.error(f"Ошибка генерации отчета: {e}")
+        if 'loading_msg' in locals():
+            await loading_msg.delete()
+        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
+
+async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
+    """Генерация отчета по активности пользователей с полным реестром"""
+    try:
+        user_id = str(update.effective_user.id)
+        
+        # Показываем анимированное сообщение
+        loading_msg = await update.message.reply_text("📈 Формирую полный отчет активности...")
+        
+        # Собираем данные всех пользователей из CSV
+        all_users_data = []
+        
+        for uid, user_info in users_cache.items():
+            # Фильтруем по сети
+            if user_info.get('visibility') not in ['All', network]:
+                continue
+            
+            # Фильтруем по филиалу если нужно
+            if permissions['branch'] != 'All' and user_info.get('branch') != 'All' and user_info.get('branch') != permissions['branch']:
+                continue
+            
+            # Получаем данные активности
+            activity = user_activity.get(uid, None)
+            
+            # Определяем статус активности
+            if activity:
+                is_active = True
+                notification_count = activity['count']
+                last_activity = activity['last_activity'].strftime('%d.%m.%Y %H:%M')
+            else:
+                is_active = False
+                notification_count = 0
+                last_activity = 'Нет активности'
+            
+            all_users_data.append({
+                'ФИО': user_info.get('name', 'Не указано'),
+                'Telegram ID': uid,
+                'Филиал': user_info.get('branch', '-'),
+                'РЭС': user_info.get('res', '-'),
+                'Ответственный': user_info.get('responsible', '-'),
+                'Email': user_info.get('email', '-'),
+                'Статус': 'Активный' if is_active else 'Неактивный',
+                'Количество уведомлений': notification_count,
+                'Последняя активность': last_activity
+            })
+        
+        if not all_users_data:
+            await loading_msg.delete()
+            await update.message.reply_text("📈 Нет данных для отчета")
+            return
+        
+        # Создаем DataFrame и сортируем
+        df = pd.DataFrame(all_users_data)
+        df = df.sort_values(['Статус', 'Количество уведомлений'], ascending=[True, False])
+        
+        # Создаем Excel файл с форматированием
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, sheet_name='Активность пользователей', index=False)
+            
+            # Получаем объекты workbook и worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Активность пользователей']
+            
+            # Формат заголовков
+            header_format = workbook.add_format({
+                'bg_color': '#4B4B4B',
+                'font_color': 'white',
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'border': 1
+            })
+            
+            # Форматы для активных и неактивных пользователей
+            active_format = workbook.add_format({
+                'bg_color': '#E8F5E9',  # Нежно зеленый
+                'border': 1
+            })
+            
+            inactive_format = workbook.add_format({
+                'bg_color': '#FFEBEE',  # Нежно красный
+                'border': 1
+            })
+            
+            # Применяем формат к заголовкам
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Применяем цветовую индикацию к строкам
+            for row_num, (index, row) in enumerate(df.iterrows(), start=1):
+                cell_format = active_format if row['Статус'] == 'Активный' else inactive_format
+                for col_num, value in enumerate(row):
+                    worksheet.write(row_num, col_num, value, cell_format)
+            
+            # Автоподбор ширины колонок
+            for i, col in enumerate(df.columns):
+                column_len = df[col].astype(str).map(len).max()
+                column_len = max(column_len, len(col)) + 2
+                worksheet.set_column(i, i, min(column_len, 40))
+            
+            # Добавляем автофильтр
+            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+        
+        output.seek(0)
+        
+        # Удаляем анимированное сообщение
+        await loading_msg.delete()
+        
+        # Подсчитываем статистику
+        active_count = len(df[df['Статус'] == 'Активный'])
+        inactive_count = len(df[df['Статус'] == 'Неактивный'])
+        
+        # Отправляем файл
+        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
+        filename = f"Полный_реестр_активности_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        caption = f"""📈 Полный отчет активности {network_name}
+
+👥 Всего пользователей: {len(df)}
+✅ Активных: {active_count} (нежно-зеленый)
+❌ Неактивных: {inactive_count} (нежно-красный)
+
+📊 Отчет содержит полный реестр пользователей с цветовой индикацией активности"""
+        
+        await update.message.reply_document(
+            document=InputFile(output, filename=filename),
+            caption=caption
+        )
+        
+        # Сохраняем последний отчет
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Полный реестр активности {network_name}",
+            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка генерации отчета активности: {e}")
+        if 'loading_msg' in locals():
+            await loading_msg.delete()
+        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
+
+async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
+    """Отправка email через SMTP"""
+    if not SMTP_EMAIL or not SMTP_PASSWORD:
+        logger.error("Email настройки не заданы")
+        return False
+    
+    try:
+        # Создаем сообщение
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_EMAIL
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        
+        # Добавляем текст
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # Добавляем вложение если есть
+        if attachment_data and attachment_name:
+            attachment_data.seek(0)
+            
+            # Определяем MIME тип по расширению файла
+            if attachment_name.endswith('.xlsx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                mime_subtype = 'xlsx'
+            elif attachment_name.endswith('.xls'):
+                mime_type = 'application/vnd.ms-excel'
+                mime_subtype = 'xls'
+            elif attachment_name.endswith('.pdf'):
+                mime_type = 'application/pdf'
+                mime_subtype = 'pdf'
+            elif attachment_name.endswith('.doc'):
+                mime_type = 'application/msword'
+                mime_subtype = 'doc'
+            elif attachment_name.endswith('.docx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                mime_subtype = 'docx'
+            else:
+                mime_type = 'application/octet-stream'
+                mime_subtype = 'octet-stream'
+            
+            part = MIMEBase('application', mime_subtype)
+            part.set_payload(attachment_data.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Type', mime_type)
+            part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
+            msg.attach(part)
+        
+        # Отправляем (разная логика для разных портов)
+        if SMTP_PORT == 465:
+            # SSL соединение (Mail.ru)
+            import ssl
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        else:
+            # TLS соединение (Яндекс, Gmail)
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_EMAIL, SMTP_PASSWORD)
+                server.send_message(msg)
+        
+        logger.info(f"Email отправлен на {to_email}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки email: {e}")
+        return False
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Попытаемся уведомить пользователя об ошибке
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
+            )
+    except Exception:
+        pass
+
+async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка доступности пользователя для отправки сообщений"""
+    if len(context.args) == 0:
+        await update.message.reply_text("Использование: /checkuser <telegram_id>")
+        return
+    
+    target_id = context.args[0]
+    
+    try:
+        # Пытаемся получить информацию о чате
+        chat = await context.bot.get_chat(chat_id=target_id)
+        await update.message.reply_text(
+            f"✅ Пользователь доступен\n"
+            f"ID: {target_id}\n"
+            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
+            f"Username: @{chat.username or 'нет'}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
+            f"Ошибка: {str(e)}\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь не начал диалог с ботом\n"
+            f"• Пользователь заблокировал бота\n"
+            f"• Неверный ID"
+        )
+
+async def preload_documents():
+    """Предзагрузка документов в кэш при старте"""
+    logger.info("Начинаем предзагрузку документов...")
+    
+    for doc_name, doc_url in REFERENCE_DOCS.items():
+        if doc_url:
+            try:
+                logger.info(f"Загружаем {doc_name}...")
+                await get_cached_document(doc_name, doc_url)
+                logger.info(f"✅ {doc_name} загружен в кэш")
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки {doc_name}: {e}")
+    
+    logger.info("Предзагрузка документов завершена")
+
+async def refresh_users_data():
+    """Периодическое обновление данных пользователей"""
+    while True:
+        await asyncio.sleep(300)  # Обновляем каждые 5 минут
+        logger.info("Обновляем данные пользователей...")
+        try:
+            load_users_data()
+            logger.info("✅ Данные пользователей обновлены")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления данных пользователей: {e}")
+
+async def refresh_documents_cache():
+    """Периодическое обновление кэша документов"""
+    while True:
+        await asyncio.sleep(3600)  # Ждем час
+        logger.info("Обновляем кэш документов...")
+        
+        for doc_name in list(documents_cache.keys()):
+            doc_url = REFERENCE_DOCS.get(doc_name)
+            if doc_url:
+                try:
+                    # Очищаем старый кэш
+                    del documents_cache[doc_name]
+                    del documents_cache_time[doc_name]
+                    
+                    # Загружаем заново
+                    await get_cached_document(doc_name, doc_url)
+                    logger.info(f"✅ Обновлен кэш для {doc_name}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
+
+if __name__ == '__main__':
+    # Создаем приложение
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("checkuser", check_user))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_error_handler(error_handler)
+    
+    # Загружаем данные пользователей
+    load_users_data()
+    
+    # Создаем корутину для инициализации
+    async def init_and_start():
+        """Инициализация и запуск"""
+        # Предзагружаем документы
+        await preload_documents()
+        
+        # Запускаем фоновые задачи
+        asyncio.create_task(refresh_documents_cache())
+        asyncio.create_task(refresh_users_data())
+    
+    # Добавляем обработчик для инициализации при старте
+    async def post_init(application: Application) -> None:
+        """Вызывается после инициализации приложения"""
+        await init_and_start()
+    
+    # Устанавливаем post_init callback
+    application.post_init = post_init
+    
+    # Запускаем webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True
+    )
             f"❌ У вас нет доступа к боту.\n"
             f"Ваш ID: {user_id}\n"
             f"Обратитесь к администратору для получения прав."
@@ -578,89 +1313,96 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     
     # Поиск ТП
-    elif state == 'search_tp' and user_states[user_id].get('action') == 'search':
-        branch = user_states[user_id].get('branch')
-        network = user_states[user_id].get('network')
-        
-        logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
-        
-        # Показываем анимированное сообщение
-        search_messages = [
-            "🔍 Ищу информацию...",
-            "📡 Подключаюсь к базе данных...",
-            "⚡ Сканирую электросети...",
-            "📊 Анализирую данные...",
-            "🔄 Обрабатываю результаты..."
-        ]
-        
-        # Отправляем первое сообщение
-        loading_msg = await update.message.reply_text(search_messages[0])
-        
-        # Анимация поиска
-        for i, msg_text in enumerate(search_messages[1:], 1):
-            await asyncio.sleep(0.5)  # Задержка между сообщениями
-            try:
-                await loading_msg.edit_text(msg_text)
-            except Exception:
-                pass  # Игнорируем ошибки редактирования
-        
-        # Загружаем данные филиала
-        env_key = get_env_key_for_branch(branch, network)
-        csv_url = os.environ.get(env_key)
-        
-        logger.info(f"URL из переменной {env_key}: {csv_url}")
-        
-        if not csv_url:
-            # Показываем все доступные переменные окружения для отладки
-            available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
-            logger.error(f"Доступные переменные для {network}: {available_vars}")
-            await loading_msg.delete()
+    elif state == 'search_tp':
+        if text == '🔍 Новый поиск':
+            # Остаемся в том же состоянии
+            keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
-                f"❌ Данные для филиала {branch} не найдены\n"
-                f"Искали переменную: {env_key}\n"
-                f"Доступные: {', '.join(available_vars[:5])}"
-            )
-            return
-        
-        data = load_csv_from_url(csv_url)
-        results = search_tp_in_data(text, data, 'Наименование ТП')
-        
-        # Удаляем анимированное сообщение
-        await loading_msg.delete()
-        
-        if not results:
-            await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
-            return
-        
-        # Группируем результаты по ТП
-        tp_list = list(set([r['Наименование ТП'] for r in results]))
-        
-        if len(tp_list) == 1:
-            # Если найдена только одна ТП, сразу показываем результаты
-            await show_tp_results(update, results, tp_list[0])
-        else:
-            # Показываем список найденных ТП
-            keyboard = []
-            for tp in tp_list[:10]:  # Ограничиваем 10 результатами
-                keyboard.append([tp])
-            keyboard.append(['⬅️ Назад'])
-            
-            user_states[user_id]['search_results'] = results
-            user_states[user_id]['action'] = 'select_tp'
-            
-            await update.message.reply_text(
-                f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
+                "🔍 Введите наименование ТП для поиска:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
-    
-    # Выбор ТП из результатов поиска
-    elif state == 'search_tp' and user_states[user_id].get('action') == 'select_tp':
-        results = user_states[user_id].get('search_results', [])
-        filtered_results = [r for r in results if r['Наименование ТП'] == text]
+        elif user_states[user_id].get('action') == 'search':
+            branch = user_states[user_id].get('branch')
+            network = user_states[user_id].get('network')
+            
+            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
+            
+            # Показываем анимированное сообщение
+            search_messages = [
+                "🔍 Ищу информацию...",
+                "📡 Подключаюсь к базе данных...",
+                "⚡ Сканирую электросети...",
+                "📊 Анализирую данные...",
+                "🔄 Обрабатываю результаты..."
+            ]
+            
+            # Отправляем первое сообщение
+            loading_msg = await update.message.reply_text(search_messages[0])
+            
+            # Анимация поиска
+            for i, msg_text in enumerate(search_messages[1:], 1):
+                await asyncio.sleep(0.5)  # Задержка между сообщениями
+                try:
+                    await loading_msg.edit_text(msg_text)
+                except Exception:
+                    pass  # Игнорируем ошибки редактирования
+            
+            # Загружаем данные филиала
+            env_key = get_env_key_for_branch(branch, network)
+            csv_url = os.environ.get(env_key)
+            
+            logger.info(f"URL из переменной {env_key}: {csv_url}")
+            
+            if not csv_url:
+                # Показываем все доступные переменные окружения для отладки
+                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
+                logger.error(f"Доступные переменные для {network}: {available_vars}")
+                await loading_msg.delete()
+                await update.message.reply_text(
+                    f"❌ Данные для филиала {branch} не найдены\n"
+                    f"Искали переменную: {env_key}\n"
+                    f"Доступные: {', '.join(available_vars[:5])}"
+                )
+                return
+            
+            data = load_csv_from_url(csv_url)
+            results = search_tp_in_data(text, data, 'Наименование ТП')
+            
+            # Удаляем анимированное сообщение
+            await loading_msg.delete()
+            
+            if not results:
+                await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
+                return
+            
+            # Группируем результаты по ТП
+            tp_list = list(set([r['Наименование ТП'] for r in results]))
+            
+            if len(tp_list) == 1:
+                # Если найдена только одна ТП, сразу показываем результаты
+                await show_tp_results(update, results, tp_list[0])
+            else:
+                # Показываем список найденных ТП
+                keyboard = []
+                for tp in tp_list[:10]:  # Ограничиваем 10 результатами
+                    keyboard.append([tp])
+                keyboard.append(['⬅️ Назад'])
+                
+                user_states[user_id]['search_results'] = results
+                user_states[user_id]['action'] = 'select_tp'
+                
+                await update.message.reply_text(
+                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
         
-        if filtered_results:
-            await show_tp_results(update, filtered_results, text)
-            user_states[user_id]['action'] = 'search'
+        elif user_states[user_id].get('action') == 'select_tp':
+            results = user_states[user_id].get('search_results', [])
+            filtered_results = [r for r in results if r['Наименование ТП'] == text]
+            
+            if filtered_results:
+                await show_tp_results(update, filtered_results, text)
+                user_states[user_id]['action'] = 'search'
     
     # Уведомление - поиск ТП
     elif state == 'send_notification' and user_states[user_id].get('action') == 'notification_tp':
@@ -1147,6 +1889,12 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
             await update.message.reply_text(part)
     else:
         await update.message.reply_text(message)
+    
+    # Показываем клавиатуру с кнопками после поиска
+    await update.message.reply_text(
+        "Выберите действие:",
+        reply_markup=get_after_search_keyboard()
+    )
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка геолокации"""
@@ -1223,654 +1971,3 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         
         await update.message.reply_text(
-            "✅ Фото получено!\n\n"
-            "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-
-async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправить уведомление ответственным лицам"""
-    user_id = str(update.effective_user.id)
-    user_data = user_states.get(user_id, {})
-    
-    # Получаем данные отправителя
-    sender_info = get_user_permissions(user_id)
-    
-    # Получаем данные уведомления
-    tp_data = user_data.get('tp_data', {})
-    selected_tp = user_data.get('selected_tp')
-    selected_vl = user_data.get('selected_vl')
-    location = user_data.get('location', {})
-    photo_id = user_data.get('photo_id')
-    comment = user_data.get('comment', '')
-    
-    # Получаем данные из справочника (колонки A и B)
-    branch_from_reference = tp_data.get('Филиал', '').strip()  # Колонка A
-    res_from_reference = tp_data.get('РЭС', '').strip()  # Колонка B
-    
-    branch = user_data.get('branch')
-    network = user_data.get('network')
-    
-    # Показываем анимированное сообщение отправки
-    sending_messages = [
-        "📨 Подготовка уведомления...",
-        "🔍 Поиск ответственных лиц...",
-        "📤 Отправка уведомлений...",
-        "✅ Почти готово..."
-    ]
-    
-    loading_msg = await update.message.reply_text(sending_messages[0])
-    
-    for msg_text in sending_messages[1:]:
-        await asyncio.sleep(0.5)
-        try:
-            await loading_msg.edit_text(msg_text)
-        except Exception:
-            pass
-    
-    # Ищем всех ответственных в базе
-    responsible_users = []
-    
-    logger.info(f"Ищем ответственных для:")
-    logger.info(f"  Филиал из справочника: '{branch_from_reference}'")
-    logger.info(f"  РЭС из справочника: '{res_from_reference}'")
-    
-    # Проходим по всем пользователям и проверяем колонку "Ответственный"
-    for uid, udata in users_cache.items():
-        responsible_for = udata.get('responsible', '').strip()
-        
-        if not responsible_for:
-            continue
-            
-        # Проверяем совпадение с филиалом или РЭС из справочника
-        if responsible_for == branch_from_reference or responsible_for == res_from_reference:
-            responsible_users.append({
-                'id': uid,
-                'name': udata.get('name', 'Неизвестный'),
-                'email': udata.get('email', ''),
-                'responsible_for': responsible_for
-            })
-            logger.info(f"Найден ответственный: {udata.get('name')} (ID: {uid}) - отвечает за '{responsible_for}'")
-    
-    # Формируем текст уведомления
-    notification_text = f"""🚨 НОВОЕ УВЕДОМЛЕНИЕ О БЕЗДОГОВОРНОМ ВОЛС
-
-📍 Филиал: {branch}
-📍 РЭС: {res_from_reference}
-📍 ТП: {selected_tp}
-⚡ ВЛ: {selected_vl}
-
-👤 Отправитель: {sender_info['name']}
-🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
-
-    if location:
-        lat = location.get('latitude')
-        lon = location.get('longitude')
-        notification_text += f"\n📍 Координаты: {lat:.6f}, {lon:.6f}"
-        notification_text += f"\n🗺 [Открыть на карте](https://maps.google.com/?q={lat},{lon})"
-    
-    if comment:
-        notification_text += f"\n\n💬 Комментарий: {comment}"
-    
-    # Формируем список получателей для записи в хранилище
-    recipients_info = ", ".join([f"{u['name']} ({u['id']})" for u in responsible_users]) if responsible_users else "Не найдены"
-    
-    # Сохраняем уведомление в хранилище
-    notification_data = {
-        'branch': branch,
-        'res': res_from_reference,
-        'tp': selected_tp,
-        'vl': selected_vl,
-        'sender_name': sender_info['name'],
-        'sender_id': user_id,
-        'recipient_name': recipients_info,
-        'recipient_id': ", ".join([u['id'] for u in responsible_users]) if responsible_users else 'Не найдены',
-        'datetime': datetime.now().strftime('%d.%m.%Y %H:%M'),
-        'coordinates': f"{location.get('latitude', 0):.6f}, {location.get('longitude', 0):.6f}" if location else 'Не указаны',
-        'comment': comment,
-        'has_photo': bool(photo_id)
-    }
-    
-    notifications_storage[network].append(notification_data)
-    
-    # Обновляем активность пользователя
-    if user_id not in user_activity:
-        user_activity[user_id] = {'last_activity': datetime.now(), 'count': 0}
-    user_activity[user_id]['count'] += 1
-    user_activity[user_id]['last_activity'] = datetime.now()
-    
-    # Отправляем уведомления всем найденным ответственным
-    success_count = 0
-    failed_users = []
-    
-    for responsible in responsible_users:
-        try:
-            # Отправляем текст
-            await context.bot.send_message(
-                chat_id=responsible['id'],
-                text=notification_text,
-                parse_mode='Markdown'
-            )
-            
-            # Отправляем локацию
-            if location:
-                await context.bot.send_location(
-                    chat_id=responsible['id'],
-                    latitude=location.get('latitude'),
-                    longitude=location.get('longitude')
-                )
-            
-            # Отправляем фото
-            if photo_id:
-                await context.bot.send_photo(
-                    chat_id=responsible['id'],
-                    photo=photo_id,
-                    caption=f"Фото с {selected_tp}"
-                )
-            
-            success_count += 1
-            
-            # Отправляем email если включено
-            if (responsible['email'] and 
-                user_email_settings.get(responsible['id'], {}).get('enabled', True)):
-                
-                email_subject = f"ВОЛС: Уведомление от {sender_info['name']}"
-                email_body = f"""Добрый день, {responsible['name']}!
-
-Получено новое уведомление о бездоговорном ВОЛС.
-
-{notification_text.replace('🚨', '').replace('📍', '•').replace('⚡', '•').replace('👤', '•').replace('🕐', '•').replace('💬', '•').replace('🗺', '')}
-
-Для просмотра деталей откройте Telegram.
-
-С уважением,
-Бот ВОЛС Ассистент"""
-                
-                await send_email(responsible['email'], email_subject, email_body)
-                
-        except Exception as e:
-            logger.error(f"Ошибка отправки уведомления пользователю {responsible['name']} ({responsible['id']}): {e}")
-            failed_users.append(f"{responsible['name']} ({responsible['id']}): {str(e)}")
-    
-    # Удаляем анимированное сообщение
-    await loading_msg.delete()
-    
-    # Формируем результат
-    if responsible_users:
-        if success_count == len(responsible_users):
-            result_text = f"""✅ Уведомления успешно отправлены!
-
-📨 Получатели ({success_count}):"""
-            for responsible in responsible_users:
-                result_text += f"\n• {responsible['name']} (отвечает за {responsible['responsible_for']})"
-                if responsible['email'] and user_email_settings.get(responsible['id'], {}).get('enabled', True):
-                    result_text += f" 📧"
-        else:
-            result_text = f"""⚠️ Уведомления отправлены частично
-
-✅ Успешно: {success_count} из {len(responsible_users)}
-
-❌ Ошибки:"""
-            for failed in failed_users:
-                result_text += f"\n• {failed}"
-    else:
-        result_text = f"""❌ Ответственные не найдены
-
-Для данной ТП не назначены ответственные лица.
-Уведомление сохранено в системе и будет доступно в отчетах.
-
-Отладочная информация:
-- Филиал из справочника: "{branch_from_reference}"
-- РЭС из справочника: "{res_from_reference}"
-- Всего пользователей в базе: {len(users_cache)}
-
-Список значений в колонке "Ответственный":"""
-        # Показываем уникальные значения из колонки Ответственный для отладки
-        unique_responsible = set(u.get('responsible', '') for u in users_cache.values() if u.get('responsible'))
-        for resp in list(unique_responsible)[:10]:
-            result_text += f"\n• {resp}"
-        if len(unique_responsible) > 10:
-            result_text += f"\n... и еще {len(unique_responsible) - 10}"
-    
-    # Очищаем состояние
-    user_states[user_id] = {'state': f'branch_{branch}', 'branch': branch, 'network': network}
-    
-    await update.message.reply_text(
-        result_text,
-        reply_markup=get_branch_menu_keyboard()
-    )
-
-async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
-    """Генерация отчета"""
-    try:
-        user_id = str(update.effective_user.id)
-        notifications = notifications_storage[network]
-        
-        if not notifications:
-            await update.message.reply_text("📊 Нет данных для отчета")
-            return
-        
-        # Фильтруем уведомления в зависимости от прав
-        if permissions['branch'] != 'All':
-            notifications = [n for n in notifications if n['branch'] == permissions['branch']]
-        
-        if not notifications:
-            await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
-            return
-        
-        # Показываем анимированное сообщение
-        report_messages = [
-            "📊 Собираю данные...",
-            "📈 Формирую статистику...",
-            "📝 Создаю таблицы...",
-            "🎨 Оформляю отчет...",
-            "💾 Сохраняю файл..."
-        ]
-        
-        loading_msg = await update.message.reply_text(report_messages[0])
-        
-        for msg_text in report_messages[1:]:
-            await asyncio.sleep(0.5)
-            try:
-                await loading_msg.edit_text(msg_text)
-            except Exception:
-                pass
-        
-        # Создаем DataFrame
-        df = pd.DataFrame(notifications)
-        
-        # Проверяем наличие необходимых колонок
-        required_columns = ['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']
-        existing_columns = [col for col in required_columns if col in df.columns]
-        
-        if not existing_columns:
-            await loading_msg.delete()
-            await update.message.reply_text("📊 Недостаточно данных для формирования отчета")
-            return
-            
-        df = df[existing_columns]
-        
-        # Переименовываем колонки
-        column_mapping = {
-            'branch': 'ФИЛИАЛ',
-            'res': 'РЭС', 
-            'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
-            'sender_id': 'ID ОТПРАВИТЕЛЯ',
-            'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
-            'recipient_id': 'ID ПОЛУЧАТЕЛЯ',
-            'datetime': 'ВРЕМЯ ДАТА',
-            'coordinates': 'КООРДИНАТЫ'
-        }
-        df.rename(columns=column_mapping, inplace=True)
-        
-        # Создаем Excel файл
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Уведомления', index=False)
-            
-            # Форматирование
-            workbook = writer.book
-            worksheet = writer.sheets['Уведомления']
-            
-            # Формат заголовков
-            header_format = workbook.add_format({
-                'bg_color': '#FFE6E6',
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'border': 1
-            })
-            
-            # Применяем формат к заголовкам
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Автоподбор ширины колонок
-            for i, col in enumerate(df.columns):
-                column_len = df[col].astype(str).map(len).max()
-                column_len = max(column_len, len(col)) + 2
-                worksheet.set_column(i, i, column_len)
-        
-        # ВАЖНО: Перемещаем указатель в начало после записи
-        output.seek(0)
-        
-        # Удаляем анимированное сообщение
-        await loading_msg.delete()
-        
-        # Отправляем файл в чат
-        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
-        filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        # Создаем InputFile для правильной отправки
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=f"📊 Отчет по уведомлениям {network_name}"
-        )
-        
-        # Сохраняем последний отчет пользователя
-        output.seek(0)
-        last_reports[user_id] = {
-            'data': BytesIO(output.read()),
-            'filename': filename,
-            'type': f"Уведомления {network_name}",
-            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
-        }
-        
-        # Устанавливаем состояние для действий с отчетом
-        user_states[user_id]['state'] = 'report_actions'
-        
-        # Показываем кнопки действий с отчетом
-        await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_report_action_keyboard()
-        )
-                
-    except Exception as e:
-        logger.error(f"Ошибка генерации отчета: {e}")
-        if 'loading_msg' in locals():
-            await loading_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
-
-async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
-    """Генерация отчета по активности пользователей"""
-    try:
-        user_id = str(update.effective_user.id)
-        
-        # Показываем анимированное сообщение
-        loading_msg = await update.message.reply_text("📈 Анализирую активность пользователей...")
-        
-        # Собираем данные активности
-        activity_data = []
-        
-        for uid, activity in user_activity.items():
-            user_info = users_cache.get(uid, {})
-            
-            # Фильтруем по сети
-            if user_info.get('visibility') not in ['All', network]:
-                continue
-            
-            # Фильтруем по филиалу если нужно
-            if permissions['branch'] != 'All' and user_info.get('branch') != permissions['branch']:
-                continue
-            
-            activity_data.append({
-                'ФИО': user_info.get('name', 'Неизвестный'),
-                'Филиал': user_info.get('branch', '-'),
-                'РЭС': user_info.get('res', '-'),
-                'Количество уведомлений': activity['count'],
-                'Последняя активность': activity['last_activity'].strftime('%d.%m.%Y %H:%M')
-            })
-        
-        if not activity_data:
-            await loading_msg.delete()
-            await update.message.reply_text("📈 Нет данных по активности")
-            return
-        
-        # Создаем DataFrame
-        df = pd.DataFrame(activity_data)
-        df = df.sort_values('Количество уведомлений', ascending=False)
-        
-        # Создаем Excel файл
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Активность', index=False)
-            
-            # Форматирование
-            workbook = writer.book
-            worksheet = writer.sheets['Активность']
-            
-            # Формат заголовков
-            header_format = workbook.add_format({
-                'bg_color': '#E6F3FF',
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'border': 1
-            })
-            
-            # Применяем формат к заголовкам
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            # Автоподбор ширины колонок
-            for i, col in enumerate(df.columns):
-                column_len = df[col].astype(str).map(len).max()
-                column_len = max(column_len, len(col)) + 2
-                worksheet.set_column(i, i, column_len)
-        
-        output.seek(0)
-        
-        # Удаляем анимированное сообщение
-        await loading_msg.delete()
-        
-        # Отправляем файл
-        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
-        filename = f"Активность_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=f"📈 Отчет по активности пользователей {network_name}"
-        )
-        
-        # Сохраняем последний отчет
-        output.seek(0)
-        last_reports[user_id] = {
-            'data': BytesIO(output.read()),
-            'filename': filename,
-            'type': f"Активность {network_name}",
-            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
-        }
-        
-        # Устанавливаем состояние для действий с отчетом
-        user_states[user_id]['state'] = 'report_actions'
-        
-        # Показываем кнопки действий
-        await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_report_action_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка генерации отчета активности: {e}")
-        if 'loading_msg' in locals():
-            await loading_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
-
-async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
-    """Отправка email через SMTP"""
-    if not SMTP_EMAIL or not SMTP_PASSWORD:
-        logger.error("Email настройки не заданы")
-        return False
-    
-    try:
-        # Создаем сообщение
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_EMAIL
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        
-        # Добавляем текст
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        
-        # Добавляем вложение если есть
-        if attachment_data and attachment_name:
-            attachment_data.seek(0)
-            
-            # Определяем MIME тип по расширению файла
-            if attachment_name.endswith('.xlsx'):
-                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-                mime_subtype = 'xlsx'
-            elif attachment_name.endswith('.xls'):
-                mime_type = 'application/vnd.ms-excel'
-                mime_subtype = 'xls'
-            elif attachment_name.endswith('.pdf'):
-                mime_type = 'application/pdf'
-                mime_subtype = 'pdf'
-            elif attachment_name.endswith('.doc'):
-                mime_type = 'application/msword'
-                mime_subtype = 'doc'
-            elif attachment_name.endswith('.docx'):
-                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-                mime_subtype = 'docx'
-            else:
-                mime_type = 'application/octet-stream'
-                mime_subtype = 'octet-stream'
-            
-            part = MIMEBase('application', mime_subtype)
-            part.set_payload(attachment_data.read())
-            encoders.encode_base64(part)
-            part.add_header('Content-Type', mime_type)
-            part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
-            msg.attach(part)
-        
-        # Отправляем (разная логика для разных портов)
-        if SMTP_PORT == 465:
-            # SSL соединение (Mail.ru)
-            import ssl
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
-                server.login(SMTP_EMAIL, SMTP_PASSWORD)
-                server.send_message(msg)
-        else:
-            # TLS соединение (Яндекс, Gmail)
-            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-                server.starttls()
-                server.login(SMTP_EMAIL, SMTP_PASSWORD)
-                server.send_message(msg)
-        
-        logger.info(f"Email отправлен на {to_email}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Ошибка отправки email: {e}")
-        return False
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
-    logger.error(f"Exception while handling an update: {context.error}")
-    
-    # Попытаемся уведомить пользователя об ошибке
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
-            )
-    except Exception:
-        pass
-
-async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка доступности пользователя для отправки сообщений"""
-    if len(context.args) == 0:
-        await update.message.reply_text("Использование: /checkuser <telegram_id>")
-        return
-    
-    target_id = context.args[0]
-    
-    try:
-        # Пытаемся получить информацию о чате
-        chat = await context.bot.get_chat(chat_id=target_id)
-        await update.message.reply_text(
-            f"✅ Пользователь доступен\n"
-            f"ID: {target_id}\n"
-            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
-            f"Username: @{chat.username or 'нет'}"
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
-            f"Ошибка: {str(e)}\n\n"
-            f"Возможные причины:\n"
-            f"• Пользователь не начал диалог с ботом\n"
-            f"• Пользователь заблокировал бота\n"
-            f"• Неверный ID"
-        )
-
-async def preload_documents():
-    """Предзагрузка документов в кэш при старте"""
-    logger.info("Начинаем предзагрузку документов...")
-    
-    for doc_name, doc_url in REFERENCE_DOCS.items():
-        if doc_url:
-            try:
-                logger.info(f"Загружаем {doc_name}...")
-                await get_cached_document(doc_name, doc_url)
-                logger.info(f"✅ {doc_name} загружен в кэш")
-            except Exception as e:
-                logger.error(f"❌ Ошибка загрузки {doc_name}: {e}")
-    
-    logger.info("Предзагрузка документов завершена")
-
-async def refresh_users_data():
-    """Периодическое обновление данных пользователей"""
-    while True:
-        await asyncio.sleep(300)  # Обновляем каждые 5 минут
-        logger.info("Обновляем данные пользователей...")
-        try:
-            load_users_data()
-            logger.info("✅ Данные пользователей обновлены")
-        except Exception as e:
-            logger.error(f"❌ Ошибка обновления данных пользователей: {e}")
-
-async def refresh_documents_cache():
-    """Периодическое обновление кэша документов"""
-    while True:
-        await asyncio.sleep(3600)  # Ждем час
-        logger.info("Обновляем кэш документов...")
-        
-        for doc_name in list(documents_cache.keys()):
-            doc_url = REFERENCE_DOCS.get(doc_name)
-            if doc_url:
-                try:
-                    # Очищаем старый кэш
-                    del documents_cache[doc_name]
-                    del documents_cache_time[doc_name]
-                    
-                    # Загружаем заново
-                    await get_cached_document(doc_name, doc_url)
-                    logger.info(f"✅ Обновлен кэш для {doc_name}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
-
-if __name__ == '__main__':
-    # Создаем приложение
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Добавляем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("checkuser", check_user))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_error_handler(error_handler)
-    
-    # Загружаем данные пользователей
-    load_users_data()
-    
-    # Создаем корутину для инициализации
-    async def init_and_start():
-        """Инициализация и запуск"""
-        # Предзагружаем документы
-        await preload_documents()
-        
-        # Запускаем фоновые задачи
-        asyncio.create_task(refresh_documents_cache())
-        asyncio.create_task(refresh_users_data())
-    
-    # Добавляем обработчик для инициализации при старте
-    async def post_init(application: Application) -> None:
-        """Вызывается после инициализации приложения"""
-        await init_and_start()
-    
-    # Устанавливаем post_init callback
-    application.post_init = post_init
-    
-    # Запускаем webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        drop_pending_updates=True
-    )

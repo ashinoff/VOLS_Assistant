@@ -1406,23 +1406,28 @@ if __name__ == '__main__':
     # Загружаем данные пользователей
     load_users_data()
     
-    # Создаем задачу для предзагрузки документов
-    async def startup():
-        """Запуск бота с предзагрузкой"""
+    # Создаем корутину для инициализации
+    async def init_and_start():
+        """Инициализация и запуск"""
         # Предзагружаем документы
         await preload_documents()
         
         # Запускаем фоновую задачу обновления кэша
         asyncio.create_task(refresh_documents_cache())
-        
-        # Запускаем webhook
-        await application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-            drop_pending_updates=True
-        )
     
-    # Запускаем
-    asyncio.run(startup())
+    # Добавляем обработчик для инициализации при старте
+    async def post_init(application: Application) -> None:
+        """Вызывается после инициализации приложения"""
+        await init_and_start()
+    
+    # Устанавливаем post_init callback
+    application.post_init = post_init
+    
+    # Запускаем webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True
+    )

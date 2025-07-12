@@ -423,10 +423,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not permissions['visibility']:
         await update.message.reply_text(
-            "✅ Фото получено!\n\n"
-            "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            f"❌ У вас нет доступа к боту.\n"
+            f"Ваш ID: {user_id}\n"
+            f"Обратитесь к администратору для получения прав."
         )
+        return
+    
+    user_states[user_id] = {'state': 'main'}
+    
+    await update.message.reply_text(
+        f"👋 Добро пожаловать, {permissions['name']}!",
+        reply_markup=get_main_keyboard(permissions)
+    )
 
 async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправить уведомление ответственным лицам"""
@@ -1023,146 +1031,6 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
         logger.error(f"Ошибка отправки email: {e}")
         return False
 
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
-    logger.error(f"Exception while handling an update: {context.error}")
-    
-    # Попытаемся уведомить пользователя об ошибке
-    try:
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
-            )
-    except Exception:
-        pass
-
-async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка доступности пользователя для отправки сообщений"""
-    if len(context.args) == 0:
-        await update.message.reply_text("Использование: /checkuser <telegram_id>")
-        return
-    
-    target_id = context.args[0]
-    
-    try:
-        # Пытаемся получить информацию о чате
-        chat = await context.bot.get_chat(chat_id=target_id)
-        await update.message.reply_text(
-            f"✅ Пользователь доступен\n"
-            f"ID: {target_id}\n"
-            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
-            f"Username: @{chat.username or 'нет'}"
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
-            f"Ошибка: {str(e)}\n\n"
-            f"Возможные причины:\n"
-            f"• Пользователь не начал диалог с ботом\n"
-            f"• Пользователь заблокировал бота\n"
-            f"• Неверный ID"
-        )
-
-async def preload_documents():
-    """Предзагрузка документов в кэш при старте"""
-    logger.info("Начинаем предзагрузку документов...")
-    
-    for doc_name, doc_url in REFERENCE_DOCS.items():
-        if doc_url:
-            try:
-                logger.info(f"Загружаем {doc_name}...")
-                await get_cached_document(doc_name, doc_url)
-                logger.info(f"✅ {doc_name} загружен в кэш")
-            except Exception as e:
-                logger.error(f"❌ Ошибка загрузки {doc_name}: {e}")
-    
-    logger.info("Предзагрузка документов завершена")
-
-async def refresh_users_data():
-    """Периодическое обновление данных пользователей"""
-    while True:
-        await asyncio.sleep(300)  # Обновляем каждые 5 минут
-        logger.info("Обновляем данные пользователей...")
-        try:
-            load_users_data()
-            logger.info("✅ Данные пользователей обновлены")
-        except Exception as e:
-            logger.error(f"❌ Ошибка обновления данных пользователей: {e}")
-
-async def refresh_documents_cache():
-    """Периодическое обновление кэша документов"""
-    while True:
-        await asyncio.sleep(3600)  # Ждем час
-        logger.info("Обновляем кэш документов...")
-        
-        for doc_name in list(documents_cache.keys()):
-            doc_url = REFERENCE_DOCS.get(doc_name)
-            if doc_url:
-                try:
-                    # Очищаем старый кэш
-                    del documents_cache[doc_name]
-                    del documents_cache_time[doc_name]
-                    
-                    # Загружаем заново
-                    await get_cached_document(doc_name, doc_url)
-                    logger.info(f"✅ Обновлен кэш для {doc_name}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
-
-if __name__ == '__main__':
-    # Создаем приложение
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Добавляем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("checkuser", check_user))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_error_handler(error_handler)
-    
-    # Загружаем данные пользователей
-    load_users_data()
-    
-    # Создаем корутину для инициализации
-    async def init_and_start():
-        """Инициализация и запуск"""
-        # Предзагружаем документы
-        await preload_documents()
-        
-        # Запускаем фоновые задачи
-        asyncio.create_task(refresh_documents_cache())
-        asyncio.create_task(refresh_users_data())
-    
-    # Добавляем обработчик для инициализации при старте
-    async def post_init(application: Application) -> None:
-        """Вызывается после инициализации приложения"""
-        await init_and_start()
-    
-    # Устанавливаем post_init callback
-    application.post_init = post_init
-    
-    # Запускаем webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        drop_pending_updates=True
-    )
-            f"❌ У вас нет доступа к боту.\n"
-            f"Ваш ID: {user_id}\n"
-            f"Обратитесь к администратору для получения прав."
-        )
-        return
-    
-    user_states[user_id] = {'state': 'main'}
-    
-    await update.message.reply_text(
-        f"👋 Добро пожаловать, {permissions['name']}!",
-        reply_markup=get_main_keyboard(permissions)
-    )
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
     user_id = str(update.effective_user.id)
@@ -1321,81 +1189,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔍 Введите наименование ТП для поиска:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
-        elif user_states[user_id].get('action') == 'search':
-            branch = user_states[user_id].get('branch')
-            network = user_states[user_id].get('network')
-            
-            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
-            
-            # Показываем анимированное сообщение
-            search_messages = [
-                "🔍 Ищу информацию...",
-                "📡 Подключаюсь к базе данных...",
-                "⚡ Сканирую электросети...",
-                "📊 Анализирую данные...",
-                "🔄 Обрабатываю результаты..."
-            ]
-            
-            # Отправляем первое сообщение
-            loading_msg = await update.message.reply_text(search_messages[0])
-            
-            # Анимация поиска
-            for i, msg_text in enumerate(search_messages[1:], 1):
-                await asyncio.sleep(0.5)  # Задержка между сообщениями
-                try:
-                    await loading_msg.edit_text(msg_text)
-                except Exception:
-                    pass  # Игнорируем ошибки редактирования
-            
-            # Загружаем данные филиала
-            env_key = get_env_key_for_branch(branch, network)
-            csv_url = os.environ.get(env_key)
-            
-            logger.info(f"URL из переменной {env_key}: {csv_url}")
-            
-            if not csv_url:
-                # Показываем все доступные переменные окружения для отладки
-                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
-                logger.error(f"Доступные переменные для {network}: {available_vars}")
-                await loading_msg.delete()
-                await update.message.reply_text(
-                    f"❌ Данные для филиала {branch} не найдены\n"
-                    f"Искали переменную: {env_key}\n"
-                    f"Доступные: {', '.join(available_vars[:5])}"
-                )
-                return
-            
-            data = load_csv_from_url(csv_url)
-            results = search_tp_in_data(text, data, 'Наименование ТП')
-            
-            # Удаляем анимированное сообщение
-            await loading_msg.delete()
-            
-            if not results:
-                await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
-                return
-            
-            # Группируем результаты по ТП
-            tp_list = list(set([r['Наименование ТП'] for r in results]))
-            
-            if len(tp_list) == 1:
-                # Если найдена только одна ТП, сразу показываем результаты
-                await show_tp_results(update, results, tp_list[0])
-            else:
-                # Показываем список найденных ТП
-                keyboard = []
-                for tp in tp_list[:10]:  # Ограничиваем 10 результатами
-                    keyboard.append([tp])
-                keyboard.append(['⬅️ Назад'])
-                
-                user_states[user_id]['search_results'] = results
-                user_states[user_id]['action'] = 'select_tp'
-                
-                await update.message.reply_text(
-                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-        
         elif user_states[user_id].get('action') == 'select_tp':
             results = user_states[user_id].get('search_results', [])
             filtered_results = [r for r in results if r['Наименование ТП'] == text]
@@ -1975,3 +1768,206 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Попытаемся уведомить пользователя об ошибке
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
+            )
+    except Exception:
+        pass
+
+async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверка доступности пользователя для отправки сообщений"""
+    if len(context.args) == 0:
+        await update.message.reply_text("Использование: /checkuser <telegram_id>")
+        return
+    
+    target_id = context.args[0]
+    
+    try:
+        # Пытаемся получить информацию о чате
+        chat = await context.bot.get_chat(chat_id=target_id)
+        await update.message.reply_text(
+            f"✅ Пользователь доступен\n"
+            f"ID: {target_id}\n"
+            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
+            f"Username: @{chat.username or 'нет'}"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
+            f"Ошибка: {str(e)}\n\n"
+            f"Возможные причины:\n"
+            f"• Пользователь не начал диалог с ботом\n"
+            f"• Пользователь заблокировал бота\n"
+            f"• Неверный ID"
+        )
+
+async def preload_documents():
+    """Предзагрузка документов в кэш при старте"""
+    logger.info("Начинаем предзагрузку документов...")
+    
+    for doc_name, doc_url in REFERENCE_DOCS.items():
+        if doc_url:
+            try:
+                logger.info(f"Загружаем {doc_name}...")
+                await get_cached_document(doc_name, doc_url)
+                logger.info(f"✅ {doc_name} загружен в кэш")
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки {doc_name}: {e}")
+    
+    logger.info("Предзагрузка документов завершена")
+
+async def refresh_users_data():
+    """Периодическое обновление данных пользователей"""
+    while True:
+        await asyncio.sleep(300)  # Обновляем каждые 5 минут
+        logger.info("Обновляем данные пользователей...")
+        try:
+            load_users_data()
+            logger.info("✅ Данные пользователей обновлены")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления данных пользователей: {e}")
+
+async def refresh_documents_cache():
+    """Периодическое обновление кэша документов"""
+    while True:
+        await asyncio.sleep(3600)  # Ждем час
+        logger.info("Обновляем кэш документов...")
+        
+        for doc_name in list(documents_cache.keys()):
+            doc_url = REFERENCE_DOCS.get(doc_name)
+            if doc_url:
+                try:
+                    # Очищаем старый кэш
+                    del documents_cache[doc_name]
+                    del documents_cache_time[doc_name]
+                    
+                    # Загружаем заново
+                    await get_cached_document(doc_name, doc_url)
+                    logger.info(f"✅ Обновлен кэш для {doc_name}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
+
+if __name__ == '__main__':
+    # Создаем приложение
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("checkuser", check_user))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_error_handler(error_handler)
+    
+    # Загружаем данные пользователей
+    load_users_data()
+    
+    # Создаем корутину для инициализации
+    async def init_and_start():
+        """Инициализация и запуск"""
+        # Предзагружаем документы
+        await preload_documents()
+        
+        # Запускаем фоновые задачи
+        asyncio.create_task(refresh_documents_cache())
+        asyncio.create_task(refresh_users_data())
+    
+    # Добавляем обработчик для инициализации при старте
+    async def post_init(application: Application) -> None:
+        """Вызывается после инициализации приложения"""
+        await init_and_start()
+    
+    # Устанавливаем post_init callback
+    application.post_init = post_init
+    
+    # Запускаем webhook
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+        drop_pending_updates=True
+    )search':
+            branch = user_states[user_id].get('branch')
+            network = user_states[user_id].get('network')
+            
+            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
+            
+            # Показываем анимированное сообщение
+            search_messages = [
+                "🔍 Ищу информацию...",
+                "📡 Подключаюсь к базе данных...",
+                "⚡ Сканирую электросети...",
+                "📊 Анализирую данные...",
+                "🔄 Обрабатываю результаты..."
+            ]
+            
+            # Отправляем первое сообщение
+            loading_msg = await update.message.reply_text(search_messages[0])
+            
+            # Анимация поиска
+            for i, msg_text in enumerate(search_messages[1:], 1):
+                await asyncio.sleep(0.5)  # Задержка между сообщениями
+                try:
+                    await loading_msg.edit_text(msg_text)
+                except Exception:
+                    pass  # Игнорируем ошибки редактирования
+            
+            # Загружаем данные филиала
+            env_key = get_env_key_for_branch(branch, network)
+            csv_url = os.environ.get(env_key)
+            
+            logger.info(f"URL из переменной {env_key}: {csv_url}")
+            
+            if not csv_url:
+                # Показываем все доступные переменные окружения для отладки
+                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
+                logger.error(f"Доступные переменные для {network}: {available_vars}")
+                await loading_msg.delete()
+                await update.message.reply_text(
+                    f"❌ Данные для филиала {branch} не найдены\n"
+                    f"Искали переменную: {env_key}\n"
+                    f"Доступные: {', '.join(available_vars[:5])}"
+                )
+                return
+            
+            data = load_csv_from_url(csv_url)
+            results = search_tp_in_data(text, data, 'Наименование ТП')
+            
+            # Удаляем анимированное сообщение
+            await loading_msg.delete()
+            
+            if not results:
+                await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
+                return
+            
+            # Группируем результаты по ТП
+            tp_list = list(set([r['Наименование ТП'] for r in results]))
+            
+            if len(tp_list) == 1:
+                # Если найдена только одна ТП, сразу показываем результаты
+                await show_tp_results(update, results, tp_list[0])
+            else:
+                # Показываем список найденных ТП
+                keyboard = []
+                for tp in tp_list[:10]:  # Ограничиваем 10 результатами
+                    keyboard.append([tp])
+                keyboard.append(['⬅️ Назад'])
+                
+                user_states[user_id]['search_results'] = results
+                user_states[user_id]['action'] = 'select_tp'
+                
+                await update.message.reply_text(
+                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
+        
+        elif user_states[user_id].get('action') == '

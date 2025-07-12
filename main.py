@@ -1971,3 +1971,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         
         await update.message.reply_text(
+            "✅ Фото получено!\n\n"
+            "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )

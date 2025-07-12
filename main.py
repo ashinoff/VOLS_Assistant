@@ -20,6 +20,12 @@ from email import encoders
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Константы
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+WEBHOOK_URL = os.environ.get('WEBHOOK_URL')
+PORT = int(os.environ.get('PORT', 5000))
+ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
+
 # Email настройки
 SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.yandex.ru')
 SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))

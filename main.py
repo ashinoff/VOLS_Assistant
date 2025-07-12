@@ -240,6 +240,12 @@ def search_tp_in_data(tp_query: str, data: List[Dict], column: str) -> List[Dict
     
     return results
 
+def update_user_activity(user_id: str):
+    """Обновить активность пользователя"""
+    if user_id not in user_activity:
+        user_activity[user_id] = {'last_activity': datetime.now(), 'count': 0}
+    user_activity[user_id]['last_activity'] = datetime.now()
+
 def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     """Получить главную клавиатуру в зависимости от прав"""
     keyboard = []
@@ -431,6 +437,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not permissions['visibility']:
         await update.message.reply_text("❌ У вас нет доступа к боту.")
         return
+    
+    # Обновляем активность пользователя
+    update_user_activity(user_id)
     
     state = user_states.get(user_id, {}).get('state', 'main')
     
@@ -747,6 +756,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
         )
     
+    # Обработка действий при отправке уведомления с фото
+    elif state == 'send_notification':
+        action = user_states[user_id].get('action')
+        
+        # Пропуск фото и переход к комментарию
+        if action == 'request_photo' and text == '⏭ Пропустить и добавить комментарий':
+            user_states[user_id]['action'] = 'add_comment'
+            keyboard = [
+                ['📤 Отправить без комментария'],
+                ['⬅️ Назад']
+            ]
+            await update.message.reply_text(
+                "💬 Введите комментарий к уведомлению:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        
+        # Отправка без фото и комментария
+        elif action == 'request_photo' and text == '📤 Отправить без фото и комментария':
+            await send_notification(update, context)
+        
+        # Отправка без комментария (с фото или без)
+        elif action == 'add_comment' and text == '📤 Отправить без комментария':
+            await send_notification(update, context)
+        
+        # Добавление комментария
+        elif action == 'add_comment' and text not in ['⬅️ Назад', '📤 Отправить без комментария']:
+            user_states[user_id]['comment'] = text
+            await send_notification(update, context)
+    
     # Персональные настройки
     elif state == 'settings':
         if text == '📧 Мои email уведомления':
@@ -876,6 +914,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await generate_report(update, context, 'RK', permissions)
         elif text == '📊 Уведомления РОССЕТИ ЮГ':
             await generate_report(update, context, 'UG', permissions)
+        elif text == '📈 Активность РОССЕТИ КУБАНЬ':
+            await generate_activity_report(update, context, 'RK', permissions)
+        elif text == '📈 Активность РОССЕТИ ЮГ':
+            await generate_activity_report(update, context, 'UG', permissions)
     
     # Действия с отчетом
     elif state == 'report_actions':
@@ -1162,6 +1204,227 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
 
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка фотографий"""
+    user_id = str(update.effective_user.id)
+    state = user_states.get(user_id, {}).get('state')
+    
+    if state == 'send_notification' and user_states[user_id].get('action') == 'request_photo':
+        # Сохраняем фото
+        photo = update.message.photo[-1]  # Берем фото в максимальном качестве
+        file_id = photo.file_id
+        
+        user_states[user_id]['photo_id'] = file_id
+        user_states[user_id]['action'] = 'add_comment'
+        
+        keyboard = [
+            ['📤 Отправить без комментария'],
+            ['⬅️ Назад']
+        ]
+        
+        await update.message.reply_text(
+            "✅ Фото получено!\n\n"
+            "Теперь добавьте комментарий к уведомлению или отправьте без комментария:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправить уведомление ответственным лицам"""
+    user_id = str(update.effective_user.id)
+    user_data = user_states.get(user_id, {})
+    
+    # Получаем данные отправителя
+    sender_info = get_user_permissions(user_id)
+    
+    # Получаем данные уведомления
+    tp_data = user_data.get('tp_data', {})
+    selected_tp = user_data.get('selected_tp')
+    selected_vl = user_data.get('selected_vl')
+    location = user_data.get('location', {})
+    photo_id = user_data.get('photo_id')
+    comment = user_data.get('comment', '')
+    
+    # Определяем получателя
+    res_name = tp_data.get('РЭС', '')
+    branch = user_data.get('branch')
+    network = user_data.get('network')
+    
+    # Показываем анимированное сообщение отправки
+    sending_messages = [
+        "📨 Подготовка уведомления...",
+        "🔍 Поиск ответственного лица...",
+        "📤 Отправка уведомления...",
+        "✅ Почти готово..."
+    ]
+    
+    loading_msg = await update.message.reply_text(sending_messages[0])
+    
+    for msg_text in sending_messages[1:]:
+        await asyncio.sleep(0.5)
+        try:
+            await loading_msg.edit_text(msg_text)
+        except Exception:
+            pass
+    
+    # Ищем ответственного в базе
+    responsible_id = None
+    responsible_name = None
+    
+    for uid, udata in users_cache.items():
+        if (udata.get('responsible') == 'Да' and 
+            udata.get('res') == res_name and 
+            udata.get('branch') == branch):
+            responsible_id = uid
+            responsible_name = udata.get('name', 'Неизвестный')
+            break
+    
+    # Если не нашли конкретного ответственного, ищем общего администратора
+    if not responsible_id:
+        for uid, udata in users_cache.items():
+            if (udata.get('responsible') == 'Да' and 
+                udata.get('res') == 'All' and 
+                udata.get('visibility') == network):
+                responsible_id = uid
+                responsible_name = udata.get('name', 'Администратор')
+                break
+    
+    # Формируем текст уведомления
+    notification_text = f"""🚨 НОВОЕ УВЕДОМЛЕНИЕ О БЕЗДОГОВОРНОМ ВОЛС
+
+📍 Филиал: {branch}
+📍 РЭС: {res_name}
+📍 ТП: {selected_tp}
+⚡ ВЛ: {selected_vl}
+
+👤 Отправитель: {sender_info['name']}
+🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}"""
+
+    if location:
+        lat = location.get('latitude')
+        lon = location.get('longitude')
+        notification_text += f"\n📍 Координаты: {lat:.6f}, {lon:.6f}"
+        notification_text += f"\n🗺 [Открыть на карте](https://maps.google.com/?q={lat},{lon})"
+    
+    if comment:
+        notification_text += f"\n\n💬 Комментарий: {comment}"
+    
+    # Сохраняем уведомление в хранилище
+    notification_data = {
+        'branch': branch,
+        'res': res_name,
+        'tp': selected_tp,
+        'vl': selected_vl,
+        'sender_name': sender_info['name'],
+        'sender_id': user_id,
+        'recipient_name': responsible_name or 'Не назначен',
+        'recipient_id': responsible_id or 'Не найден',
+        'datetime': datetime.now().strftime('%d.%m.%Y %H:%M'),
+        'coordinates': f"{location.get('latitude', 0):.6f}, {location.get('longitude', 0):.6f}" if location else 'Не указаны',
+        'comment': comment,
+        'has_photo': bool(photo_id)
+    }
+    
+    notifications_storage[network].append(notification_data)
+    
+    # Обновляем активность пользователя
+    if user_id not in user_activity:
+        user_activity[user_id] = {'last_activity': datetime.now(), 'count': 0}
+    user_activity[user_id]['count'] += 1
+    user_activity[user_id]['last_activity'] = datetime.now()
+    
+    # Отправляем уведомление ответственному
+    success = False
+    error_message = ""
+    recipient_email = None
+    
+    if responsible_id:
+        try:
+            # Отправляем текст
+            await context.bot.send_message(
+                chat_id=responsible_id,
+                text=notification_text,
+                parse_mode='Markdown'
+            )
+            
+            # Отправляем локацию
+            if location:
+                await context.bot.send_location(
+                    chat_id=responsible_id,
+                    latitude=location.get('latitude'),
+                    longitude=location.get('longitude')
+                )
+            
+            # Отправляем фото
+            if photo_id:
+                await context.bot.send_photo(
+                    chat_id=responsible_id,
+                    photo=photo_id,
+                    caption=f"Фото с {selected_tp}"
+                )
+            
+            success = True
+            
+            # Отправляем email если включено
+            recipient_data = users_cache.get(responsible_id, {})
+            recipient_email = recipient_data.get('email')
+            if (recipient_email and 
+                user_email_settings.get(responsible_id, {}).get('enabled', True)):
+                
+                email_subject = f"ВОЛС: Уведомление от {sender_info['name']}"
+                email_body = f"""Добрый день, {responsible_name}!
+
+Получено новое уведомление о бездоговорном ВОЛС.
+
+{notification_text.replace('🚨', '').replace('📍', '•').replace('⚡', '•').replace('👤', '•').replace('🕐', '•').replace('💬', '•').replace('🗺', '')}
+
+Для просмотра деталей откройте Telegram.
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                await send_email(recipient_email, email_subject, email_body)
+                
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления: {e}")
+            error_message = str(e)
+    
+    # Удаляем анимированное сообщение
+    await loading_msg.delete()
+    
+    # Отправляем результат
+    if success:
+        result_text = f"""✅ Уведомление успешно отправлено!
+
+📨 Получатель: {responsible_name}
+🆔 ID: {responsible_id}"""
+        
+        if recipient_email and user_email_settings.get(responsible_id, {}).get('enabled', True):
+            result_text += f"\n📧 Email: {recipient_email}"
+    else:
+        if responsible_id:
+            result_text = f"""⚠️ Не удалось отправить уведомление
+
+Ответственный: {responsible_name}
+ID: {responsible_id}
+Ошибка: {error_message}
+
+Возможные причины:
+• Пользователь не начал диалог с ботом
+• Пользователь заблокировал бота"""
+        else:
+            result_text = f"""❌ Ответственный не найден
+
+Для РЭС "{res_name}" филиала "{branch}" не назначен ответственный.
+Уведомление сохранено в системе и будет доступно в отчетах."""
+    
+    # Очищаем состояние
+    user_states[user_id] = {'state': f'branch_{branch}', 'branch': branch, 'network': network}
+    
+    await update.message.reply_text(
+        result_text,
+        reply_markup=get_branch_menu_keyboard()
+    )
+
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
     """Генерация отчета"""
     try:
@@ -1290,6 +1553,112 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
                 
     except Exception as e:
         logger.error(f"Ошибка генерации отчета: {e}")
+        if 'loading_msg' in locals():
+            await loading_msg.delete()
+        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
+
+async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
+    """Генерация отчета по активности пользователей"""
+    try:
+        user_id = str(update.effective_user.id)
+        
+        # Показываем анимированное сообщение
+        loading_msg = await update.message.reply_text("📈 Анализирую активность пользователей...")
+        
+        # Собираем данные активности
+        activity_data = []
+        
+        for uid, activity in user_activity.items():
+            user_info = users_cache.get(uid, {})
+            
+            # Фильтруем по сети
+            if user_info.get('visibility') not in ['All', network]:
+                continue
+            
+            # Фильтруем по филиалу если нужно
+            if permissions['branch'] != 'All' and user_info.get('branch') != permissions['branch']:
+                continue
+            
+            activity_data.append({
+                'ФИО': user_info.get('name', 'Неизвестный'),
+                'Филиал': user_info.get('branch', '-'),
+                'РЭС': user_info.get('res', '-'),
+                'Количество уведомлений': activity['count'],
+                'Последняя активность': activity['last_activity'].strftime('%d.%m.%Y %H:%M')
+            })
+        
+        if not activity_data:
+            await loading_msg.delete()
+            await update.message.reply_text("📈 Нет данных по активности")
+            return
+        
+        # Создаем DataFrame
+        df = pd.DataFrame(activity_data)
+        df = df.sort_values('Количество уведомлений', ascending=False)
+        
+        # Создаем Excel файл
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, sheet_name='Активность', index=False)
+            
+            # Форматирование
+            workbook = writer.book
+            worksheet = writer.sheets['Активность']
+            
+            # Формат заголовков
+            header_format = workbook.add_format({
+                'bg_color': '#E6F3FF',
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'border': 1
+            })
+            
+            # Применяем формат к заголовкам
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Автоподбор ширины колонок
+            for i, col in enumerate(df.columns):
+                column_len = df[col].astype(str).map(len).max()
+                column_len = max(column_len, len(col)) + 2
+                worksheet.set_column(i, i, column_len)
+        
+        output.seek(0)
+        
+        # Удаляем анимированное сообщение
+        await loading_msg.delete()
+        
+        # Отправляем файл
+        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
+        filename = f"Активность_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        await update.message.reply_document(
+            document=InputFile(output, filename=filename),
+            caption=f"📈 Отчет по активности пользователей {network_name}"
+        )
+        
+        # Сохраняем последний отчет
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Активность {network_name}",
+            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка генерации отчета активности: {e}")
         if 'loading_msg' in locals():
             await loading_msg.delete()
         await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")

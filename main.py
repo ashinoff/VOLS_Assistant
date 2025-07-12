@@ -962,10 +962,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             doc_info = user_states[user_id].get('current_document', {})
             doc_name = doc_info.get('name', '')
             doc_url = doc_info.get('url', '')
+            doc_filename = doc_info.get('filename', '')
             
             if doc_name and doc_url:
-                subject = f"Документ: {doc_name}"
-                body = f"""Добрый день, {user_data.get('name', '')}!
+                # Показываем сообщение о загрузке
+                loading_msg = await update.message.reply_text("⏳ Подготавливаю документ для отправки...")
+                
+                try:
+                    # Получаем документ из кэша
+                    document = await get_cached_document(doc_name, doc_url)
+                    
+                    if document:
+                        subject = f"Документ: {doc_name}"
+                        body = f"""Добрый день, {user_data.get('name', '')}!
+
+По вашему запросу направляем документ "{doc_name}".
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                        
+                        document.seek(0)
+                        if await send_email(user_email, subject, body, document, doc_filename):
+                            await loading_msg.delete()
+                            await update.message.reply_text(f"✅ Документ отправлен на {user_email}")
+                        else:
+                            await loading_msg.delete()
+                            await update.message.reply_text("❌ Ошибка отправки. Возможно, ваш email-провайдер временно блокирует отправку.")
+                    else:
+                        await loading_msg.delete()
+                        # Если не удалось загрузить файл, отправляем ссылку
+                        subject = f"Документ: {doc_name}"
+                        body = f"""Добрый день, {user_data.get('name', '')}!
 
 Вы запросили документ "{doc_name}" через бот ВОЛС Ассистент.
 
@@ -973,11 +1000,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 С уважением,
 Бот ВОЛС Ассистент"""
-                
-                if await send_email(user_email, subject, body):
-                    await update.message.reply_text(f"✅ Ссылка на документ отправлена на {user_email}")
-                else:
-                    await update.message.reply_text("❌ Ошибка отправки. Возможно, ваш email-провайдер временно блокирует отправку.")
+                        
+                        if await send_email(user_email, subject, body):
+                            await update.message.reply_text(f"✅ Ссылка на документ отправлена на {user_email}")
+                        else:
+                            await update.message.reply_text("❌ Ошибка отправки.")
+                            
+                except Exception as e:
+                    logger.error(f"Ошибка отправки документа на почту: {e}")
+                    await loading_msg.delete()
+                    await update.message.reply_text("❌ Ошибка отправки документа")
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""
@@ -1289,10 +1321,32 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
         # Добавляем вложение если есть
         if attachment_data and attachment_name:
             attachment_data.seek(0)
-            part = MIMEBase('application', 'octet-stream')
+            
+            # Определяем MIME тип по расширению файла
+            if attachment_name.endswith('.xlsx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                mime_subtype = 'xlsx'
+            elif attachment_name.endswith('.xls'):
+                mime_type = 'application/vnd.ms-excel'
+                mime_subtype = 'xls'
+            elif attachment_name.endswith('.pdf'):
+                mime_type = 'application/pdf'
+                mime_subtype = 'pdf'
+            elif attachment_name.endswith('.doc'):
+                mime_type = 'application/msword'
+                mime_subtype = 'doc'
+            elif attachment_name.endswith('.docx'):
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                mime_subtype = 'docx'
+            else:
+                mime_type = 'application/octet-stream'
+                mime_subtype = 'octet-stream'
+            
+            part = MIMEBase('application', mime_subtype)
             part.set_payload(attachment_data.read())
             encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename={attachment_name}')
+            part.add_header('Content-Type', mime_type)
+            part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
             msg.attach(part)
         
         # Отправляем (разная логика для разных портов)
@@ -1372,6 +1426,17 @@ async def preload_documents():
     
     logger.info("Предзагрузка документов завершена")
 
+async def refresh_users_data():
+    """Периодическое обновление данных пользователей"""
+    while True:
+        await asyncio.sleep(300)  # Обновляем каждые 5 минут
+        logger.info("Обновляем данные пользователей...")
+        try:
+            load_users_data()
+            logger.info("✅ Данные пользователей обновлены")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обновления данных пользователей: {e}")
+
 async def refresh_documents_cache():
     """Периодическое обновление кэша документов"""
     while True:
@@ -1412,8 +1477,9 @@ if __name__ == '__main__':
         # Предзагружаем документы
         await preload_documents()
         
-        # Запускаем фоновую задачу обновления кэша
+        # Запускаем фоновые задачи
         asyncio.create_task(refresh_documents_cache())
+        asyncio.create_task(refresh_users_data())
     
     # Добавляем обработчик для инициализации при старте
     async def post_init(application: Application) -> None:

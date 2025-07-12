@@ -62,6 +62,16 @@ user_email_settings = {}
 # Последние сгенерированные отчеты
 last_reports = {}
 
+# Справочные документы - настройте в переменных окружения
+REFERENCE_DOCS = {
+    'План по выручке ВОЛС на ВЛ 24-26 годы': os.environ.get('DOC_PLAN_VYRUCHKA_URL'),
+    'Регламент ВОЛС': os.environ.get('DOC_REGLAMENT_VOLS_URL'),
+    'Форма акта инвентаризации': os.environ.get('DOC_AKT_INVENTARIZACII_URL'),
+    'Форма гарантийного письма': os.environ.get('DOC_GARANTIJNOE_PISMO_URL'),
+    'Форма претензионного письма': os.environ.get('DOC_PRETENZIONNOE_PISMO_URL'),
+    'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
+}
+
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
     # Транслитерация русских названий в латиницу
@@ -260,16 +270,6 @@ def get_reports_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Справочные документы - настройте в переменных окружения
-REFERENCE_DOCS = {
-    'План по выручке ВОЛС на ВЛ 24-26 годы': os.environ.get('DOC_PLAN_VYRUCHKA_URL'),
-    'Регламент ВОЛС': os.environ.get('DOC_REGLAMENT_VOLS_URL'),
-    'Форма акта инвентаризации': os.environ.get('DOC_AKT_INVENTARIZACII_URL'),
-    'Форма гарантийного письма': os.environ.get('DOC_GARANTIJNOE_PISMO_URL'),
-    'Форма претензионного письма': os.environ.get('DOC_PRETENZIONNOE_PISMO_URL'),
-    'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
-}
-
 def get_settings_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура персональных настроек"""
     keyboard = [
@@ -284,7 +284,7 @@ def get_settings_keyboard() -> ReplyKeyboardMarkup:
 def get_email_settings_keyboard(user_data: Dict) -> ReplyKeyboardMarkup:
     """Клавиатура настроек email"""
     email = user_data.get('email', '')
-    email_enabled = user_data.get('email_enabled', True)
+    email_enabled = user_email_settings.get(user_data.get('id'), {}).get('enabled', True)
     
     keyboard = []
     
@@ -298,6 +298,8 @@ def get_email_settings_keyboard(user_data: Dict) -> ReplyKeyboardMarkup:
     
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_reference_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура справки с документами"""
     keyboard = []
     
@@ -632,6 +634,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text == '📧 Мои email уведомления':
             user_states[user_id]['state'] = 'email_settings'
             user_data = users_cache.get(user_id, {})
+            user_data['id'] = user_id  # Добавляем ID для функции get_email_settings_keyboard
             await update.message.reply_text(
                 "📧 Настройки email уведомлений",
                 reply_markup=get_email_settings_keyboard(user_data)
@@ -740,10 +743,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_email_settings[user_id]['enabled'] = new_status
             
             status_text = "включены" if new_status else "выключены"
+            user_data = users_cache.get(user_id, {})
+            user_data['id'] = user_id
             await update.message.reply_text(
                 f"✅ Email уведомления {status_text}",
-                reply_markup=get_email_settings_keyboard(users_cache.get(user_id, {}))
+                reply_markup=get_email_settings_keyboard(user_data)
             )
+    
+    # Отчеты
+    elif state == 'reports':
         if text == '📊 Уведомления РОССЕТИ КУБАНЬ':
             await generate_report(update, context, 'RK', permissions)
         elif text == '📊 Уведомления РОССЕТИ ЮГ':
@@ -838,7 +846,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                     
                     # Отправляем на email если указан и включены уведомления
-                    user_id = str(update.effective_user.id)
                     user_data = users_cache.get(user_id, {})
                     user_email = user_data.get('email', '')
                     email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
@@ -1051,85 +1058,107 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
     """Генерация отчета"""
-    user_id = str(update.effective_user.id)
-    notifications = notifications_storage[network]
-    
-    if not notifications:
-        await update.message.reply_text("📊 Нет данных для отчета")
-        return
-    
-    # Фильтруем уведомления в зависимости от прав
-    if permissions['branch'] != 'All':
-        notifications = [n for n in notifications if n['branch'] == permissions['branch']]
-    
-    if not notifications:
-        await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
-        return
-    
-    # Создаем DataFrame
-    df = pd.DataFrame(notifications)
-    df = df[['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']]
-    df.columns = ['ФИЛИАЛ', 'РЭС', 'ФИО ОТПРАВИТЕЛЯ', 'ID ОТПРАВИТЕЛЯ', 'ФИО ПОЛУЧАТЕЛЯ', 'ID ПОЛУЧАТЕЛЯ', 'ВРЕМЯ ДАТА', 'КООРДИНАТЫ']
-    
-    # Создаем Excel файл
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, sheet_name='Уведомления', index=False)
+    try:
+        user_id = str(update.effective_user.id)
+        notifications = notifications_storage[network]
         
-        # Форматирование
-        workbook = writer.book
-        worksheet = writer.sheets['Уведомления']
+        if not notifications:
+            await update.message.reply_text("📊 Нет данных для отчета")
+            return
         
-        # Формат заголовков
-        header_format = workbook.add_format({
-            'bg_color': '#FFE6E6',
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'vcenter',
-            'align': 'center',
-            'border': 1
-        })
+        # Фильтруем уведомления в зависимости от прав
+        if permissions['branch'] != 'All':
+            notifications = [n for n in notifications if n['branch'] == permissions['branch']]
         
-        # Применяем формат к заголовкам
-        for col_num, value in enumerate(df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
+        if not notifications:
+            await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
+            return
         
-        # Автоподбор ширины колонок
-        for i, col in enumerate(df.columns):
-            column_len = df[col].astype(str).map(len).max()
-            column_len = max(column_len, len(col)) + 2
-            worksheet.set_column(i, i, column_len)
-    
-    output.seek(0)
-    
-    # Отправляем файл в чат
-    network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
-    filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    
-    await update.message.reply_document(
-        document=output,
-        filename=filename,
-        caption=f"📊 Отчет по уведомлениям {network_name}"
-    )
-    
-    # Сохраняем последний отчет пользователя
-    output.seek(0)
-    last_reports[user_id] = {
-        'data': BytesIO(output.read()),
-        'filename': filename,
-        'type': f"Уведомления {network_name}",
-        'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
-    }
-    
-    # Отправляем на email если указан и включены уведомления
-    user_data = users_cache.get(user_id, {})
-    user_email = user_data.get('email', '')
-    email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
-    
-    if user_email and email_enabled:
+        # Создаем DataFrame
+        df = pd.DataFrame(notifications)
+        
+        # Проверяем наличие необходимых колонок
+        required_columns = ['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']
+        existing_columns = [col for col in required_columns if col in df.columns]
+        
+        if not existing_columns:
+            await update.message.reply_text("📊 Недостаточно данных для формирования отчета")
+            return
+            
+        df = df[existing_columns]
+        
+        # Переименовываем колонки
+        column_mapping = {
+            'branch': 'ФИЛИАЛ',
+            'res': 'РЭС', 
+            'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
+            'sender_id': 'ID ОТПРАВИТЕЛЯ',
+            'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
+            'recipient_id': 'ID ПОЛУЧАТЕЛЯ',
+            'datetime': 'ВРЕМЯ ДАТА',
+            'coordinates': 'КООРДИНАТЫ'
+        }
+        df.rename(columns=column_mapping, inplace=True)
+        
+        # Создаем Excel файл
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, sheet_name='Уведомления', index=False)
+            
+            # Форматирование
+            workbook = writer.book
+            worksheet = writer.sheets['Уведомления']
+            
+            # Формат заголовков
+            header_format = workbook.add_format({
+                'bg_color': '#FFE6E6',
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'vcenter',
+                'align': 'center',
+                'border': 1
+            })
+            
+            # Применяем формат к заголовкам
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+            
+            # Автоподбор ширины колонок
+            for i, col in enumerate(df.columns):
+                column_len = df[col].astype(str).map(len).max()
+                column_len = max(column_len, len(col)) + 2
+                worksheet.set_column(i, i, column_len)
+        
         output.seek(0)
-        subject = f"Отчет по уведомлениям {network_name}"
-        body = f"""Добрый день!
+        
+        # Отправляем файл в чат
+        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
+        filename = f"Уведомления_{network_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        
+        await update.message.reply_document(
+            document=output,
+            filename=filename,
+            caption=f"📊 Отчет по уведомлениям {network_name}"
+        )
+        
+        # Сохраняем последний отчет пользователя
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Уведомления {network_name}",
+            'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Отправляем на email если указан и включены уведомления
+        user_data = users_cache.get(user_id, {})
+        user_email = user_data.get('email', '')
+        email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
+        
+        if user_email and email_enabled:
+            output.seek(0)
+            subject = f"Отчет по уведомлениям {network_name}"
+            body = f"""Добрый день!
 
 Направляем вам отчет по уведомлениям {network_name} от {datetime.now().strftime('%d.%m.%Y %H:%M')}.
 
@@ -1137,11 +1166,15 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
 
 С уважением,
 Бот ВОЛС Ассистент"""
-        
-        if await send_email(user_email, subject, body, output, filename):
-            await update.message.reply_text(f"📧 Отчет также отправлен на {user_email}")
-        else:
-            await update.message.reply_text("⚠️ Не удалось отправить отчет на email")
+            
+            if await send_email(user_email, subject, body, output, filename):
+                await update.message.reply_text(f"📧 Отчет также отправлен на {user_email}")
+            else:
+                await update.message.reply_text("⚠️ Не удалось отправить отчет на email")
+                
+    except Exception as e:
+        logger.error(f"Ошибка генерации отчета: {e}")
+        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
 
 async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
     """Отправка email через SMTP"""
@@ -1189,35 +1222,21 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
     except Exception as e:
         logger.error(f"Ошибка отправки email: {e}")
         return False
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Попытаемся уведомить пользователя об ошибке
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла ошибка при обработке вашего запроса. Попробуйте еще раз."
+            )
+    except Exception:
+        pass
 
 async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Проверка доступности пользователя для отправки сообщений"""
-    if len(context.args) == 0:
-        await update.message.reply_text("Использование: /checkuser <telegram_id>")
-        return
-    
-    target_id = context.args[0]
-    
-    try:
-        # Пытаемся получить информацию о чате
-        chat = await context.bot.get_chat(chat_id=target_id)
-        await update.message.reply_text(
-            f"✅ Пользователь доступен\n"
-            f"ID: {target_id}\n"
-            f"Имя: {chat.first_name} {chat.last_name or ''}\n"
-            f"Username: @{chat.username or 'нет'}"
-        )
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Не могу отправить сообщения пользователю {target_id}\n"
-            f"Ошибка: {str(e)}\n\n"
-            f"Возможные причины:\n"
-            f"• Пользователь не начал диалог с ботом\n"
-            f"• Пользователь заблокировал бота\n"
-            f"• Неверный ID"
-        )
     """Проверка доступности пользователя для отправки сообщений"""
     if len(context.args) == 0:
         await update.message.reply_text("Использование: /checkuser <telegram_id>")
@@ -1253,7 +1272,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("checkuser", check_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    # application.add_error_handler(error_handler)  # Временно отключено
+    application.add_error_handler(error_handler)
     
     # Загружаем данные пользователей
     load_users_data()

@@ -1112,131 +1112,26 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected_tp = user_states[user_id].get('selected_tp')
         selected_vl = user_states[user_id].get('selected_vl')
         
-        # Получаем данные об ответственных
-        branch = tp_data.get('Филиал', '')
-        res = tp_data.get('РЭС', '')
+        # Сохраняем локацию
+        user_states[user_id]['location'] = {
+            'latitude': location.latitude,
+            'longitude': location.longitude
+        }
         
-        logger.info(f"Ищем ответственных для Филиал: {branch}, РЭС: {res}")
+        # Переходим к запросу фото
+        user_states[user_id]['action'] = 'request_photo'
         
-        # Загружаем свежие данные пользователей
-        load_users_data()
+        keyboard = [
+            ['📷 Отправить фото'],
+            ['⏭ Пропустить фото'],
+            ['⬅️ Назад']
+        ]
         
-        # Ищем ответственных
-        responsible_users = []
-        for tid, user_data in users_cache.items():
-            responsible = user_data.get('responsible', '')
-            # Проверяем совпадение с филиалом или РЭС
-            if responsible and (responsible.strip() == branch.strip() or responsible.strip() == res.strip()):
-                responsible_users.append((tid, user_data))
-                logger.info(f"Найден ответственный: {tid} - {user_data['name']} (ответственный за: {responsible})")
-        
-        if not responsible_users:
-            await update.message.reply_text(f"❌ Ответственный не назначен на {res} РЭС")
-            # Возвращаемся в меню филиала
-            branch_name = user_states[user_id].get('branch')
-            user_states[user_id] = {'state': f'branch_{branch_name}', 'branch': branch_name, 'network': user_states[user_id].get('network')}
-            await update.message.reply_text("Меню филиала", reply_markup=get_branch_menu_keyboard())
-            return
-        
-        # Отправляем уведомления
-        sender_permissions = get_user_permissions(user_id)
-        sender_name = sender_permissions['name']
-        
-        success_count = 0
-        failed_users = []
-        
-        for recipient_id, recipient_data in responsible_users:
-            try:
-                # Отправляем сообщение
-                await context.bot.send_message(
-                    chat_id=recipient_id,
-                    text=f"🔔 {sender_name} нашел бездоговорной ВОЛС на {selected_tp}, {selected_vl}"
-                )
-                
-                # Отправляем локацию
-                await context.bot.send_location(
-                    chat_id=recipient_id,
-                    latitude=location.latitude,
-                    longitude=location.longitude
-                )
-                
-                # Отправляем координаты текстом
-                await context.bot.send_message(
-                    chat_id=recipient_id,
-                    text=f"{location.latitude}, {location.longitude}"
-                )
-                
-                success_count += 1
-                
-                # Сохраняем уведомление
-                notification = {
-                    'branch': branch,
-                    'res': res,
-                    'sender_name': sender_name,
-                    'sender_id': user_id,
-                    'recipient_name': recipient_data['name'],
-                    'recipient_id': recipient_id,
-                    'datetime': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'coordinates': f"{location.latitude}, {location.longitude}",
-                    'tp': selected_tp,
-                    'vl': selected_vl
-                }
-                
-                network = user_states[user_id].get('network')
-                notifications_storage[network].append(notification)
-                
-            except Exception as e:
-                logger.error(f"Ошибка отправки уведомления пользователю {recipient_id}: {e}")
-                if "Chat not found" in str(e):
-                    failed_users.append(f"{recipient_data['name']} (не начал диалог с ботом)")
-                else:
-                    failed_users.append(f"{recipient_data['name']} ({str(e)})")
-        
-        # Формируем ответ с детальной информацией
-        if success_count > 0 and not failed_users:
-            # Формируем список успешно отправленных
-            success_names = []
-            for recipient_id, recipient_data in responsible_users:
-                if recipient_id not in [user.split(' (')[0] for user in failed_users]:
-                    success_names.append(recipient_data['name'])
-            
-            await update.message.reply_text(
-                f"✅ Уведомление отправлено {success_count} из {len(responsible_users)} ответственных за {res} РЭС\n\n"
-                f"Получатели:\n" + "\n".join(f"• {name}" for name in success_names)
-            )
-        elif success_count > 0 and failed_users:
-            # Формируем список успешно отправленных
-            success_names = []
-            for recipient_id, recipient_data in responsible_users:
-                # Проверяем, что пользователь не в списке неудачных
-                failed_ids = []
-                for failed in failed_users:
-                    if '(' in failed:
-                        name_part = failed.split(' (')[0]
-                        # Ищем ID этого пользователя
-                        for rid, rdata in responsible_users:
-                            if rdata['name'] == name_part:
-                                failed_ids.append(rid)
-                                break
-                
-                if recipient_id not in failed_ids:
-                    success_names.append(recipient_data['name'])
-            
-            await update.message.reply_text(
-                f"⚠️ Уведомление отправлено {success_count} из {len(responsible_users)} ответственных за {res} РЭС\n\n"
-                f"✅ Отправлено:\n" + "\n".join(f"• {name}" for name in success_names) + "\n\n"
-                f"❌ Не удалось отправить:\n" + "\n".join(f"• {user}" for user in failed_users)
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Не удалось отправить уведомления\n\n"
-                f"Проблемы:\n" + "\n".join(f"• {user}" for user in failed_users)
-            )
-        
-        # Возвращаемся в меню филиала
-        branch_name = user_states[user_id].get('branch')
-        user_states[user_id] = {'state': f'branch_{branch_name}', 'branch': branch_name, 'network': user_states[user_id].get('network')}
-        await update.message.reply_text("Меню филиала", reply_markup=get_branch_menu_keyboard())
+        await update.message.reply_text(
+            "📷 Хотите добавить фото?\n"
+            "Вы можете отправить фото или пропустить этот шаг",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
 
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
     """Генерация отчета"""

@@ -364,9 +364,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Обработка кнопки Назад
     if text == '⬅️ Назад':
-        if state in ['rosseti_kuban', 'rosseti_yug', 'reports', 'reference', 'phones']:
+        if state in ['rosseti_kuban', 'rosseti_yug', 'reports', 'reference', 'phones', 'settings']:
             user_states[user_id] = {'state': 'main'}
             await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
+        elif state == 'email_settings':
+            user_states[user_id] = {'state': 'settings'}
+            await update.message.reply_text("⚙️ Персональные настройки", reply_markup=get_settings_keyboard())
         elif state.startswith('branch_'):
             network = user_states[user_id].get('network')
             if network == 'RK':
@@ -1048,6 +1051,7 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
     """Генерация отчета"""
+    user_id = str(update.effective_user.id)
     notifications = notifications_storage[network]
     
     if not notifications:

@@ -68,6 +68,9 @@ last_reports = {}
 documents_cache = {}
 documents_cache_time = {}
 
+# Хранилище активности пользователей
+user_activity = {}  # {user_id: {'last_activity': datetime, 'count': int}}
+
 # Справочные документы - настройте в переменных окружения
 REFERENCE_DOCS = {
     'План по выручке ВОЛС на ВЛ 24-26 годы': os.environ.get('DOC_PLAN_VYRUCHKA_URL'),
@@ -309,10 +312,14 @@ def get_reports_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     if visibility == 'All':
         keyboard.append(['📊 Уведомления РОССЕТИ КУБАНЬ'])
         keyboard.append(['📊 Уведомления РОССЕТИ ЮГ'])
+        keyboard.append(['📈 Активность РОССЕТИ КУБАНЬ'])
+        keyboard.append(['📈 Активность РОССЕТИ ЮГ'])
     elif visibility == 'RK':
         keyboard.append(['📊 Уведомления РОССЕТИ КУБАНЬ'])
+        keyboard.append(['📈 Активность РОССЕТИ КУБАНЬ'])
     elif visibility == 'UG':
         keyboard.append(['📊 Уведомления РОССЕТИ ЮГ'])
+        keyboard.append(['📈 Активность РОССЕТИ ЮГ'])
     
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

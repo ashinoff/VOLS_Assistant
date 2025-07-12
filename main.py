@@ -541,8 +541,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['action'] = 'search'
             keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
-                "🔍 Введите наименование ТП для поиска\n"
-                "Введите точное или примерное название ТП",
+                "🔍 Введите наименование ТП для поиска:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         
@@ -551,8 +550,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['action'] = 'notification_tp'
             keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
-                "📨 Введите наименование ТП для уведомления\n"
-                "Введите точное или примерное название ТП",
+                "📨 Введите наименование ТП для уведомления:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         
@@ -1122,15 +1120,39 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_states[user_id]['action'] = 'request_photo'
         
         keyboard = [
-            ['📷 Отправить фото'],
-            ['⏭ Пропустить фото'],
+            ['⏭ Пропустить и добавить комментарий'],
+            ['📤 Отправить без фото и комментария'],
             ['⬅️ Назад']
         ]
         
+        # Отправляем анимированную подсказку
+        photo_tips = [
+            "📸 Подготовьте камеру...",
+            "📷 Сфотографируйте бездоговорной ВОЛС...",
+            "💡 Совет: Снимите общий вид и детали"
+        ]
+        
+        tip_msg = await update.message.reply_text(photo_tips[0])
+        
+        for tip in photo_tips[1:]:
+            await asyncio.sleep(1.5)
+            try:
+                await tip_msg.edit_text(tip)
+            except Exception:
+                pass
+        
+        await asyncio.sleep(1.5)
+        await tip_msg.delete()
+        
+        # Отправляем основное сообщение
         await update.message.reply_text(
-            "📷 Хотите добавить фото?\n"
-            "Вы можете отправить фото или пропустить этот шаг",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            "📸 Сделайте фото бездоговорного ВОЛС\n\n"
+            "Как отправить фото:\n"
+            "📱 **Мобильный**: нажмите 📎 → Камера\n"
+            "💻 **Компьютер**: нажмите 📎 → Фото\n\n"
+            "Или выберите действие ниже:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+            parse_mode='Markdown'
         )
 
 async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
@@ -1429,6 +1451,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler("checkuser", check_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_error_handler(error_handler)
     
     # Загружаем данные пользователей

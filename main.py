@@ -3,7 +3,7 @@ import logging
 import csv
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile
@@ -15,6 +15,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+import asyncio
+import aiohttp
 
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -62,6 +64,10 @@ user_email_settings = {}
 # Последние сгенерированные отчеты
 last_reports = {}
 
+# Кэш документов
+documents_cache = {}
+documents_cache_time = {}
+
 # Справочные документы - настройте в переменных окружения
 REFERENCE_DOCS = {
     'План по выручке ВОЛС на ВЛ 24-26 годы': os.environ.get('DOC_PLAN_VYRUCHKA_URL'),
@@ -71,6 +77,58 @@ REFERENCE_DOCS = {
     'Форма претензионного письма': os.environ.get('DOC_PRETENZIONNOE_PISMO_URL'),
     'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
 }
+
+async def download_document(url: str) -> Optional[BytesIO]:
+    """Скачать документ по URL"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    content = await response.read()
+                    return BytesIO(content)
+    except Exception as e:
+        logger.error(f"Ошибка загрузки документа: {e}")
+    return None
+
+async def get_cached_document(doc_name: str, doc_url: str) -> Optional[BytesIO]:
+    """Получить документ из кэша или загрузить"""
+    now = datetime.now()
+    
+    # Проверяем кэш
+    if doc_name in documents_cache:
+        cache_time = documents_cache_time.get(doc_name)
+        if cache_time and (now - cache_time) < timedelta(hours=1):
+            # Возвращаем копию из кэша
+            cached_doc = documents_cache[doc_name]
+            cached_doc.seek(0)
+            return BytesIO(cached_doc.read())
+    
+    # Загружаем документ
+    logger.info(f"Загружаем документ {doc_name} из {doc_url}")
+    
+    # Определяем тип документа по URL
+    if 'docs.google.com/document' in doc_url and '/d/' in doc_url:
+        doc_id = doc_url.split('/d/')[1].split('/')[0]
+        download_url = f"https://docs.google.com/document/d/{doc_id}/export?format=pdf"
+    elif 'docs.google.com/spreadsheets' in doc_url and '/d/' in doc_url:
+        doc_id = doc_url.split('/d/')[1].split('/')[0]
+        download_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=xlsx"
+    elif 'drive.google.com' in doc_url and '/file/d/' in doc_url:
+        file_id = doc_url.split('/file/d/')[1].split('/')[0]
+        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    else:
+        download_url = doc_url
+    
+    document = await download_document(download_url)
+    
+    if document:
+        # Сохраняем в кэш
+        document.seek(0)
+        documents_cache[doc_name] = BytesIO(document.read())
+        documents_cache_time[doc_name] = now
+        document.seek(0)
+        
+    return document
 
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
@@ -187,32 +245,21 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     branch = permissions.get('branch')
     res = permissions.get('res')
     
-    # РОССЕТИ кнопки
+    # РОССЕТИ кнопки - исправленная логика видимости
     if visibility == 'All':
         keyboard.append(['🏢 РОССЕТИ КУБАНЬ'])
         keyboard.append(['🏢 РОССЕТИ ЮГ'])
     elif visibility == 'RK':
-        if branch == 'All':
-            keyboard.append(['🏢 РОССЕТИ КУБАНЬ'])
-        else:
-            keyboard.append([f'⚡ {branch}'])
+        keyboard.append(['🏢 РОССЕТИ КУБАНЬ'])
     elif visibility == 'UG':
-        if branch == 'All':
-            keyboard.append(['🏢 РОССЕТИ ЮГ'])
-        else:
-            keyboard.append([f'⚡ {branch}'])
+        keyboard.append(['🏢 РОССЕТИ ЮГ'])
     
     # Телефоны контрагентов
     keyboard.append(['📞 ТЕЛЕФОНЫ КОНТРАГЕНТОВ'])
     
-    # Отчеты
-    if res == 'All':
-        if visibility == 'All':
-            keyboard.append(['📊 ОТЧЕТЫ'])
-        elif visibility == 'RK':
-            keyboard.append(['📊 ОТЧЕТЫ'])
-        elif visibility == 'UG':
-            keyboard.append(['📊 ОТЧЕТЫ'])
+    # Отчеты - показываем только если есть права
+    if res == 'All' and visibility in ['All', 'RK', 'UG']:
+        keyboard.append(['📊 ОТЧЕТЫ'])
     
     # Справка
     keyboard.append(['ℹ️ СПРАВКА'])
@@ -329,6 +376,22 @@ def get_reference_keyboard() -> ReplyKeyboardMarkup:
     keyboard.append(['⬅️ Назад'])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+def get_document_action_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура действий с документом"""
+    keyboard = [
+        ['📧 Отправить на почту'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_report_action_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура действий с отчетом"""
+    keyboard = [
+        ['📧 Отправить отчет на почту'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user_id = str(update.effective_user.id)
@@ -372,6 +435,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state == 'email_settings':
             user_states[user_id] = {'state': 'settings'}
             await update.message.reply_text("⚙️ Персональные настройки", reply_markup=get_settings_keyboard())
+        elif state == 'document_actions':
+            user_states[user_id]['state'] = 'reference'
+            await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
+        elif state == 'report_actions':
+            user_states[user_id]['state'] = 'reports'
+            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
         elif state.startswith('branch_'):
             network = user_states[user_id].get('network')
             if network == 'RK':
@@ -759,6 +828,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == '📊 Уведомления РОССЕТИ ЮГ':
             await generate_report(update, context, 'UG', permissions)
     
+    # Действия с отчетом
+    elif state == 'report_actions':
+        if text == '📧 Отправить отчет на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            # Получаем последний отчет
+            last_report = last_reports.get(user_id)
+            if last_report:
+                report_data = last_report['data']
+                report_name = last_report['filename']
+                report_type = last_report['type']
+                
+                subject = f"Отчет: {report_name}"
+                body = f"""Добрый день, {user_data.get('name', '')}!
+
+По вашему запросу направляем отчет по уведомлениям.
+
+Тип отчета: {report_type}
+Дата формирования: {last_report['datetime']}
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                report_data.seek(0)
+                if await send_email(user_email, subject, body, report_data, report_name):
+                    await update.message.reply_text(f"✅ Отчет отправлен на {user_email}")
+                else:
+                    await update.message.reply_text("❌ Ошибка отправки отчета.\nВозможно, ваш email-провайдер временно блокирует отправку.")
+    
     # Справка
     elif state == 'reference':
         if text.startswith('📄 ') or text.startswith('📊 '):
@@ -789,72 +892,80 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             doc_url = REFERENCE_DOCS.get(doc_name)
             
             if doc_url:
+                # Показываем сообщение о загрузке
+                loading_msg = await update.message.reply_text("⏳ Загружаю документ...")
+                
                 try:
-                    # Для Google Docs/Sheets - даем прямые ссылки на экспорт
-                    if 'docs.google.com/document' in doc_url:
-                        # Извлекаем ID документа
-                        doc_id = doc_url.split('/d/')[1].split('/')[0] if '/d/' in doc_url else None
-                        if doc_id:
-                            # Прямая ссылка на скачивание PDF
-                            pdf_url = f"https://docs.google.com/document/d/{doc_id}/export?format=pdf"
-                            await update.message.reply_text(
-                                f"📄 {doc_name}\n\n"
-                                f"Скачать PDF: {pdf_url}\n\n"
-                                f"Открыть в браузере: {doc_url}"
-                            )
-                        else:
-                            await update.message.reply_text(
-                                f"📄 {doc_name}\n\n"
-                                f"Ссылка: {doc_url}"
-                            )
+                    # Получаем документ из кэша или загружаем
+                    document = await get_cached_document(doc_name, doc_url)
                     
-                    elif 'docs.google.com/spreadsheets' in doc_url:
-                        # Извлекаем ID таблицы
-                        doc_id = doc_url.split('/d/')[1].split('/')[0] if '/d/' in doc_url else None
-                        if doc_id:
-                            # Прямая ссылка на скачивание Excel
-                            xlsx_url = f"https://docs.google.com/spreadsheets/d/{doc_id}/export?format=xlsx"
-                            await update.message.reply_text(
-                                f"📊 {doc_name}\n\n"
-                                f"Скачать Excel: {xlsx_url}\n\n"
-                                f"Открыть в браузере: {doc_url}"
-                            )
+                    if document:
+                        # Определяем расширение файла
+                        if 'spreadsheet' in doc_url or 'xlsx' in doc_url:
+                            extension = 'xlsx'
+                        elif 'document' in doc_url or 'pdf' in doc_url:
+                            extension = 'pdf'
                         else:
-                            await update.message.reply_text(
-                                f"📊 {doc_name}\n\n"
-                                f"Ссылка: {doc_url}"
-                            )
-                    
-                    elif 'drive.google.com' in doc_url:
-                        # Для файлов на Google Drive
-                        if '/file/d/' in doc_url:
-                            file_id = doc_url.split('/file/d/')[1].split('/')[0]
-                            direct_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-                            await update.message.reply_text(
-                                f"📄 {doc_name}\n\n"
-                                f"Скачать файл: {direct_url}\n\n"
-                                f"Открыть в браузере: {doc_url}"
-                            )
-                        else:
-                            await update.message.reply_text(
-                                f"📄 {doc_name}\n\n"
-                                f"Ссылка: {doc_url}"
-                            )
-                    else:
-                        # Для других ссылок
-                        await update.message.reply_text(
-                            f"📄 {doc_name}\n\n"
-                            f"Ссылка: {doc_url}"
+                            extension = 'pdf'  # по умолчанию
+                        
+                        filename = f"{doc_name}.{extension}"
+                        
+                        # Отправляем документ
+                        await update.message.reply_document(
+                            document=InputFile(document, filename=filename),
+                            caption=f"📄 {doc_name}"
                         )
-                    
-                    # Отправляем на email если указан и включены уведомления
-                    user_data = users_cache.get(user_id, {})
-                    user_email = user_data.get('email', '')
-                    email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
-                    
-                    if user_email and email_enabled:
-                        subject = f"Документ: {doc_name}"
-                        body = f"""Добрый день!
+                        
+                        # Удаляем сообщение о загрузке
+                        await loading_msg.delete()
+                        
+                        # Сохраняем информацию о документе в состоянии
+                        user_states[user_id]['state'] = 'document_actions'
+                        user_states[user_id]['current_document'] = {
+                            'name': doc_name,
+                            'url': doc_url,
+                            'filename': filename
+                        }
+                        
+                        # Показываем кнопки действий
+                        await update.message.reply_text(
+                            "Выберите действие:",
+                            reply_markup=get_document_action_keyboard()
+                        )
+                    else:
+                        await loading_msg.delete()
+                        await update.message.reply_text(
+                            f"❌ Не удалось загрузить документ.\n\n"
+                            f"Вы можете открыть его по ссылке:\n{doc_url}"
+                        )
+                        
+                except Exception as e:
+                    logger.error(f"Ошибка обработки документа {doc_name}: {e}")
+                    await loading_msg.delete()
+                    await update.message.reply_text(
+                        f"❌ Ошибка загрузки документа.\n\n"
+                        f"Вы можете открыть его по ссылке:\n{doc_url}"
+                    )
+            else:
+                await update.message.reply_text(f"❌ Документ не найден")
+    
+    # Действия с документом
+    elif state == 'document_actions':
+        if text == '📧 Отправить на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            doc_info = user_states[user_id].get('current_document', {})
+            doc_name = doc_info.get('name', '')
+            doc_url = doc_info.get('url', '')
+            
+            if doc_name and doc_url:
+                subject = f"Документ: {doc_name}"
+                body = f"""Добрый день, {user_data.get('name', '')}!
 
 Вы запросили документ "{doc_name}" через бот ВОЛС Ассистент.
 
@@ -862,18 +973,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 С уважением,
 Бот ВОЛС Ассистент"""
-                        
-                        if await send_email(user_email, subject, body):
-                            await update.message.reply_text(f"📧 Ссылка также отправлена на {user_email}")
-                        
-                except Exception as e:
-                    logger.error(f"Ошибка обработки документа {doc_name}: {e}")
-                    await update.message.reply_text(
-                        f"📄 {doc_name}\n\n"
-                        f"Ссылка: {doc_url}"
-                    )
-            else:
-                await update.message.reply_text(f"❌ Документ не найден")
+                
+                if await send_email(user_email, subject, body):
+                    await update.message.reply_text(f"✅ Ссылка на документ отправлена на {user_email}")
+                else:
+                    await update.message.reply_text("❌ Ошибка отправки. Возможно, ваш email-провайдер временно блокирует отправку.")
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""
@@ -1153,27 +1257,14 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
             'datetime': datetime.now().strftime('%d.%m.%Y %H:%M')
         }
         
-        # Отправляем на email если указан и включены уведомления
-        user_data = users_cache.get(user_id, {})
-        user_email = user_data.get('email', '')
-        email_enabled = user_email_settings.get(user_id, {}).get('enabled', True)
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
         
-        if user_email and email_enabled:
-            output.seek(0)
-            subject = f"Отчет по уведомлениям {network_name}"
-            body = f"""Добрый день!
-
-Направляем вам отчет по уведомлениям {network_name} от {datetime.now().strftime('%d.%m.%Y %H:%M')}.
-
-Всего уведомлений в отчете: {len(df)}
-
-С уважением,
-Бот ВОЛС Ассистент"""
-            
-            if await send_email(user_email, subject, body, output, filename):
-                await update.message.reply_text(f"📧 Отчет также отправлен на {user_email}")
-            else:
-                await update.message.reply_text("⚠️ Не удалось отправить отчет на email")
+        # Показываем кнопки действий с отчетом
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
+        )
                 
     except Exception as e:
         logger.error(f"Ошибка генерации отчета: {e}")
@@ -1266,6 +1357,41 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Неверный ID"
         )
 
+async def preload_documents():
+    """Предзагрузка документов в кэш при старте"""
+    logger.info("Начинаем предзагрузку документов...")
+    
+    for doc_name, doc_url in REFERENCE_DOCS.items():
+        if doc_url:
+            try:
+                logger.info(f"Загружаем {doc_name}...")
+                await get_cached_document(doc_name, doc_url)
+                logger.info(f"✅ {doc_name} загружен в кэш")
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки {doc_name}: {e}")
+    
+    logger.info("Предзагрузка документов завершена")
+
+async def refresh_documents_cache():
+    """Периодическое обновление кэша документов"""
+    while True:
+        await asyncio.sleep(3600)  # Ждем час
+        logger.info("Обновляем кэш документов...")
+        
+        for doc_name in list(documents_cache.keys()):
+            doc_url = REFERENCE_DOCS.get(doc_name)
+            if doc_url:
+                try:
+                    # Очищаем старый кэш
+                    del documents_cache[doc_name]
+                    del documents_cache_time[doc_name]
+                    
+                    # Загружаем заново
+                    await get_cached_document(doc_name, doc_url)
+                    logger.info(f"✅ Обновлен кэш для {doc_name}")
+                except Exception as e:
+                    logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
+
 if __name__ == '__main__':
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
@@ -1280,11 +1406,23 @@ if __name__ == '__main__':
     # Загружаем данные пользователей
     load_users_data()
     
-    # Запускаем webhook
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
-        drop_pending_updates=True
-    )
+    # Создаем задачу для предзагрузки документов
+    async def startup():
+        """Запуск бота с предзагрузкой"""
+        # Предзагружаем документы
+        await preload_documents()
+        
+        # Запускаем фоновую задачу обновления кэша
+        asyncio.create_task(refresh_documents_cache())
+        
+        # Запускаем webhook
+        await application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+            drop_pending_updates=True
+        )
+    
+    # Запускаем
+    asyncio.run(startup())

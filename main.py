@@ -3,6 +3,8 @@ import logging
 import csv
 import io
 import re
+import uuid
+import ssl
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import requests
@@ -416,8 +418,6 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
         msg['Reply-To'] = SMTP_EMAIL
         
         # Добавляем заголовки для предотвращения блокировки
-        import uuid
-        from email.utils import formatdate
         msg['Message-ID'] = f"<{uuid.uuid4()}@{SMTP_EMAIL.split('@')[1]}>"
         msg['Date'] = formatdate(localtime=True)
         msg['X-Mailer'] = 'VOLS Assistant Bot v1.0'
@@ -425,6 +425,7 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
         msg['Importance'] = 'Normal'
         
         # Создаем HTML версию письма
+        body_html = body.replace('\n', '<br>')
         html_body = f"""
         <html>
         <head>
@@ -434,7 +435,7 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
             <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
                 <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
                     <h2 style="color: #2c3e50; margin-bottom: 20px;">ВОЛС Ассистент</h2>
-                    <div style="white-space: pre-wrap;">{body.replace('\n', '<br>')}</div>
+                    <div style="white-space: pre-wrap;">{body_html}</div>
                 </div>
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
                     <p>Это автоматическое сообщение от системы ВОЛС Ассистент.</p>
@@ -486,7 +487,6 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
         # Отправляем (разная логика для разных портов)
         if SMTP_PORT == 465:
             # SSL соединение (Mail.ru)
-            import ssl
             context = ssl.create_default_context()
             with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
                 server.login(SMTP_EMAIL, SMTP_PASSWORD)

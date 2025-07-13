@@ -380,6 +380,7 @@ def get_reference_keyboard() -> ReplyKeyboardMarkup:
 def get_document_action_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура действий с документом"""
     keyboard = [
+        ['📧 Отправить себе на почту'],
         ['⬅️ Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -388,6 +389,14 @@ def get_after_search_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура после результатов поиска"""
     keyboard = [
         ['🔍 Новый поиск'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_report_action_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура действий с отчетом"""
+    keyboard = [
+        ['📧 Отправить себе на почту'],
         ['⬅️ Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -822,11 +831,19 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         moscow_time = get_moscow_time()
         filename = f"Уведомления_{network_name}_{moscow_time.strftime('%Y%m%d_%H%M%S')}.xlsx"
         
+        # Сохраняем отчет в состоянии пользователя для возможности отправки на почту
+        user_states[user_id]['last_report'] = {
+            'data': output.getvalue(),
+            'filename': filename,
+            'caption': f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"
+        }
+        user_states[user_id]['state'] = 'report_actions'
+        
         # Создаем InputFile для правильной отправки
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
             caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК",
-            reply_markup=get_reports_keyboard(permissions)
+            reply_markup=get_report_action_keyboard()
         )
                 
     except Exception as e:
@@ -962,10 +979,18 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
 📊 Отчет содержит полный реестр пользователей с цветовой индикацией активности
 🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"""
         
+        # Сохраняем отчет в состоянии пользователя для возможности отправки на почту
+        user_states[user_id]['last_report'] = {
+            'data': output.getvalue(),
+            'filename': filename,
+            'caption': caption
+        }
+        user_states[user_id]['state'] = 'report_actions'
+        
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
             caption=caption,
-            reply_markup=get_reports_keyboard(permissions)
+            reply_markup=get_report_action_keyboard()
         )
         
     except Exception as e:
@@ -997,6 +1022,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state == 'document_actions':
             user_states[user_id]['state'] = 'reference'
             await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
+        elif state == 'report_actions':
+            user_states[user_id]['state'] = 'reports'
+            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
         elif state.startswith('branch_'):
             network = user_states[user_id].get('network')
             if network == 'RK':
@@ -1373,6 +1401,157 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await update.message.reply_text(info_text)
     
+    # Действия с документами
+    elif state == 'document_actions':
+        if text == '📧 Отправить себе на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text(
+                    "❌ У вас не указан email в системе.\n"
+                    "Обратитесь к администратору для добавления email."
+                )
+                return
+            
+            # Получаем информацию о документе
+            doc_info = user_states[user_id].get('current_document')
+            if not doc_info:
+                await update.message.reply_text("❌ Документ не найден")
+                return
+            
+            # Показываем анимированное сообщение
+            sending_msg = await update.message.reply_text("📧 Отправляю документ на почту...")
+            
+            try:
+                # Используем сохраненные данные документа
+                doc_data = doc_info.get('data')
+                if not doc_data:
+                    # Если данных нет, пробуем загрузить
+                    document = await get_cached_document(doc_info['name'], doc_info['url'])
+                    if document:
+                        doc_data = document.getvalue()
+                
+                if doc_data:
+                    # Создаем BytesIO из данных
+                    document_io = BytesIO(doc_data)
+                    
+                    # Формируем письмо
+                    subject = f"Документ: {doc_info['name']}"
+                    body = f"""Добрый день, {user_data.get('name', 'Пользователь')}!
+
+Вы запросили отправку документа "{doc_info['name']}" из бота ВОЛС Ассистент.
+
+Документ прикреплен к данному письму.
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                    
+                    # Отправляем email
+                    success = await send_email(
+                        user_email,
+                        subject,
+                        body,
+                        document_io,
+                        doc_info['filename']
+                    )
+                    
+                    await sending_msg.delete()
+                    
+                    if success:
+                        await update.message.reply_text(
+                            f"✅ Документ успешно отправлен на {user_email}",
+                            reply_markup=get_document_action_keyboard()
+                        )
+                    else:
+                        await update.message.reply_text(
+                            "❌ Не удалось отправить документ. Попробуйте позже.",
+                            reply_markup=get_document_action_keyboard()
+                        )
+                else:
+                    await sending_msg.delete()
+                    await update.message.reply_text(
+                        "❌ Не удалось получить документ",
+                        reply_markup=get_document_action_keyboard()
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Ошибка отправки документа на почту: {e}")
+                await sending_msg.delete()
+                await update.message.reply_text(
+                    "❌ Ошибка при отправке документа",
+                    reply_markup=get_document_action_keyboard()
+                )
+    
+    # Действия с отчетами
+    elif state == 'report_actions':
+        if text == '📧 Отправить себе на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text(
+                    "❌ У вас не указан email в системе.\n"
+                    "Обратитесь к администратору для добавления email."
+                )
+                return
+            
+            # Получаем информацию об отчете
+            report_info = user_states[user_id].get('last_report')
+            if not report_info:
+                await update.message.reply_text("❌ Отчет не найден")
+                return
+            
+            # Показываем анимированное сообщение
+            sending_msg = await update.message.reply_text("📧 Отправляю отчет на почту...")
+            
+            try:
+                # Создаем BytesIO из данных отчета
+                report_data = BytesIO(report_info['data'])
+                
+                # Формируем письмо
+                subject = f"Отчет: {report_info['filename'].replace('.xlsx', '')}"
+                body = f"""Добрый день, {user_data.get('name', 'Пользователь')}!
+
+Вы запросили отправку отчета из бота ВОЛС Ассистент.
+
+{report_info['caption']}
+
+Отчет прикреплен к данному письму.
+
+С уважением,
+Бот ВОЛС Ассистент"""
+                
+                # Отправляем email
+                success = await send_email(
+                    user_email,
+                    subject,
+                    body,
+                    report_data,
+                    report_info['filename']
+                )
+                
+                await sending_msg.delete()
+                
+                if success:
+                    await update.message.reply_text(
+                        f"✅ Отчет успешно отправлен на {user_email}",
+                        reply_markup=get_report_action_keyboard()
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ Не удалось отправить отчет. Попробуйте позже.",
+                        reply_markup=get_report_action_keyboard()
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Ошибка отправки отчета на почту: {e}")
+                await sending_msg.delete()
+                await update.message.reply_text(
+                    "❌ Ошибка при отправке отчета",
+                    reply_markup=get_report_action_keyboard()
+                )
+    
     # Отчеты
     elif state == 'reports':
         if text == '📊 Уведомления РОССЕТИ КУБАНЬ':
@@ -1446,7 +1625,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         user_states[user_id]['current_document'] = {
                             'name': doc_name,
                             'url': doc_url,
-                            'filename': filename
+                            'filename': filename,
+                            'data': document.getvalue()  # Сохраняем данные документа
                         }
                         
                         # Показываем кнопки действий

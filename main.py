@@ -15,6 +15,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
+from email.utils import formatdate
 import asyncio
 import aiohttp
 import pytz
@@ -515,28 +516,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Пользователь {user_id} ({update.effective_user.first_name}) запустил бота")
     
     if not permissions['visibility']:
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=caption
-        )
-        
-        # Сохраняем последний отчет
-        output.seek(0)
-        last_reports[user_id] = {
-            'data': BytesIO(output.read()),
-            'filename': filename,
-            'type': f"Полный реестр активности {network_name}",
-            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
-        }
-        
-        # Устанавливаем состояние для действий с отчетом
-        user_states[user_id]['state'] = 'report_actions'
-        
-        # Показываем кнопки действий
         await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_report_action_keyboard()
-        )eply_text(
             f"❌ У вас нет доступа к боту.\n"
             f"Ваш ID: {user_id}\n"
             f"Обратитесь к администратору для получения прав."
@@ -697,11 +677,13 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Отправляем email если есть адрес
             if responsible['email']:
-                email_subject = f"ВОЛС: Уведомление от {sender_info['name']}"
-                email_body = f"""Добрый день, {responsible['name']}!
+                email_subject = f"Уведомление ВОЛС: {selected_tp}"
+                email_body = f"""Уважаемый(ая) {responsible['name']}!
 
 Получено новое уведомление о бездоговорном ВОЛС.
 
+ДЕТАЛИ УВЕДОМЛЕНИЯ:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Филиал: {branch}
 РЭС: {res_from_reference}
 ТП: {selected_tp}
@@ -713,21 +695,32 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if location:
                     lat = location.get('latitude')
                     lon = location.get('longitude')
-                    email_body += f"\n\nКоординаты: {lat:.6f}, {lon:.6f}"
-                    email_body += f"\nСсылка на карту: https://maps.google.com/?q={lat},{lon}"
+                    email_body += f"""
+
+МЕСТОПОЛОЖЕНИЕ:
+Координаты: {lat:.6f}, {lon:.6f}
+Ссылка на карту: https://maps.google.com/?q={lat},{lon}"""
                 
                 if comment:
-                    email_body += f"\n\nКомментарий: {comment}"
+                    email_body += f"""
+
+КОММЕНТАРИЙ:
+{comment}"""
                     
                 if photo_id:
-                    email_body += f"\n\nК уведомлению приложено фото (доступно в Telegram)"
+                    email_body += """
+
+К уведомлению приложено фото (доступно в Telegram)"""
                 
-                email_body += f"""
+                email_body += """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Для просмотра деталей и фотографий откройте Telegram.
 
+---
 С уважением,
-Бот ВОЛС Ассистент"""
+Система ВОЛС Ассистент
+Автоматизированная система контроля ВОЛС"""
                 
                 # Исправлено: отправляем email асинхронно
                 email_sent = await send_email(responsible['email'], email_subject, email_body)
@@ -1045,8 +1038,25 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
         
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
-            caption=caption,
-            reply_markup=get_reports_keyboard(permissions)
+            caption=caption
+        )
+        
+        # Сохраняем последний отчет
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Полный реестр активности {network_name}",
+            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
         )
         
     except Exception as e:
@@ -1078,6 +1088,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state == 'document_actions':
             user_states[user_id]['state'] = 'reference'
             await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
+        elif state == 'report_actions':
+            user_states[user_id]['state'] = 'reports'
+            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
         elif state.startswith('branch_'):
             network = user_states[user_id].get('network')
             if network == 'RK':
@@ -1464,6 +1477,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await generate_activity_report(update, context, 'RK', permissions)
         elif text == '📈 Активность РОССЕТИ ЮГ':
             await generate_activity_report(update, context, 'UG', permissions)
+    
+    # Действия с отчетом
+    elif state == 'report_actions':
+        if text == '📧 Отправить отчет на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            # Получаем последний отчет
+            last_report = last_reports.get(user_id)
+            if last_report:
+                # Показываем сообщение о процессе отправки
+                sending_msg = await update.message.reply_text("📧 Отправляю отчет на почту...")
+                
+                report_data = last_report['data']
+                report_name = last_report['filename']
+                report_type = last_report['type']
+                
+                subject = f"Отчет ВОЛС: {report_type}"
+                body = f"""Уважаемый(ая) {user_data.get('name', '')}!
+
+Вы запросили отправку отчета из системы ВОЛС Ассистент.
+
+Детали отчета:
+- Тип: {report_type}
+- Дата формирования: {last_report['datetime']} МСК
+- Файл: {report_name}
+
+Отчет находится во вложении к данному письму.
+
+---
+С уважением,
+Система ВОЛС Ассистент
+Автоматизированная система контроля ВОЛС"""
+                
+                report_data.seek(0)
+                if await send_email(user_email, subject, body, report_data, report_name):
+                    await sending_msg.delete()
+                    await update.message.reply_text(
+                        f"✅ Отчет успешно отправлен на {user_email}",
+                        reply_markup=get_reports_keyboard(permissions)
+                    )
+                    # Возвращаемся в меню отчетов
+                    user_states[user_id]['state'] = 'reports'
+                else:
+                    await sending_msg.delete()
+                    await update.message.reply_text(
+                        "❌ Ошибка отправки отчета.\n"
+                        "Возможно, ваш email-провайдер временно блокирует отправку.\n"
+                        "Попробуйте через несколько минут.",
+                        reply_markup=get_report_action_keyboard()
+                    )
     
     # Справка
     elif state == 'reference':

@@ -1189,15 +1189,82 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🔍 Введите наименование ТП для поиска:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
-        elif user_states[user_id].get('action') == 'select_tp':
-            results = user_states[user_id].get('search_results', [])
-            filtered_results = [r for r in results if r['Наименование ТП'] == text]
+        elif user_states[user_id].get('action') == 'search':
+            branch = user_states[user_id].get('branch')
+            network = user_states[user_id].get('network')
             
-            if filtered_results:
-                await show_tp_results(update, filtered_results, text)
-                user_states[user_id]['action'] = 'search'
-    
-    # Уведомление - поиск ТП
+            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
+            
+            # Показываем анимированное сообщение
+            search_messages = [
+                "🔍 Ищу информацию...",
+                "📡 Подключаюсь к базе данных...",
+                "⚡ Сканирую электросети...",
+                "📊 Анализирую данные...",
+                "🔄 Обрабатываю результаты..."
+            ]
+            
+            # Отправляем первое сообщение
+            loading_msg = await update.message.reply_text(search_messages[0])
+            
+            # Анимация поиска
+            for i, msg_text in enumerate(search_messages[1:], 1):
+                await asyncio.sleep(0.5)  # Задержка между сообщениями
+                try:
+                    await loading_msg.edit_text(msg_text)
+                except Exception:
+                    pass  # Игнорируем ошибки редактирования
+            
+            # Загружаем данные филиала
+            env_key = get_env_key_for_branch(branch, network)
+            csv_url = os.environ.get(env_key)
+            
+            logger.info(f"URL из переменной {env_key}: {csv_url}")
+            
+            if not csv_url:
+                # Показываем все доступные переменные окружения для отладки
+                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
+                logger.error(f"Доступные переменные для {network}: {available_vars}")
+                await loading_msg.delete()
+                await update.message.reply_text(
+                    f"❌ Данные для филиала {branch} не найдены\n"
+                    f"Искали переменную: {env_key}\n"
+                    f"Доступные: {', '.join(available_vars[:5])}"
+                )
+                return
+            
+            data = load_csv_from_url(csv_url)
+            results = search_tp_in_data(text, data, 'Наименование ТП')
+            
+            # Удаляем анимированное сообщение
+            await loading_msg.delete()
+            
+            if not results:
+                await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
+                return
+            
+            # Группируем результаты по ТП
+            tp_list = list(set([r['Наименование ТП'] for r in results]))
+            
+            if len(tp_list) == 1:
+                # Если найдена только одна ТП, сразу показываем результаты
+                await show_tp_results(update, results, tp_list[0])
+            else:
+                # Показываем список найденных ТП
+                keyboard = []
+                for tp in tp_list[:10]:  # Ограничиваем 10 результатами
+                    keyboard.append([tp])
+                keyboard.append(['⬅️ Назад'])
+                
+                user_states[user_id]['search_results'] = results
+                user_states[user_id]['action'] = 'select_tp'
+                
+                await update.message.reply_text(
+                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
+        
+        # Уведомление - поиск ТП
     elif state == 'send_notification' and user_states[user_id].get('action') == 'notification_tp':
         branch = user_states[user_id].get('branch')
         network = user_states[user_id].get('network')
@@ -1895,79 +1962,4 @@ if __name__ == '__main__':
         url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
         drop_pending_updates=True
-    )('action') == 'search':
-            branch = user_states[user_id].get('branch')
-            network = user_states[user_id].get('network')
-            
-            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
-            
-            # Показываем анимированное сообщение
-            search_messages = [
-                "🔍 Ищу информацию...",
-                "📡 Подключаюсь к базе данных...",
-                "⚡ Сканирую электросети...",
-                "📊 Анализирую данные...",
-                "🔄 Обрабатываю результаты..."
-            ]
-            
-            # Отправляем первое сообщение
-            loading_msg = await update.message.reply_text(search_messages[0])
-            
-            # Анимация поиска
-            for i, msg_text in enumerate(search_messages[1:], 1):
-                await asyncio.sleep(0.5)  # Задержка между сообщениями
-                try:
-                    await loading_msg.edit_text(msg_text)
-                except Exception:
-                    pass  # Игнорируем ошибки редактирования
-            
-            # Загружаем данные филиала
-            env_key = get_env_key_for_branch(branch, network)
-            csv_url = os.environ.get(env_key)
-            
-            logger.info(f"URL из переменной {env_key}: {csv_url}")
-            
-            if not csv_url:
-                # Показываем все доступные переменные окружения для отладки
-                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
-                logger.error(f"Доступные переменные для {network}: {available_vars}")
-                await loading_msg.delete()
-                await update.message.reply_text(
-                    f"❌ Данные для филиала {branch} не найдены\n"
-                    f"Искали переменную: {env_key}\n"
-                    f"Доступные: {', '.join(available_vars[:5])}"
-                )
-                return
-            
-            data = load_csv_from_url(csv_url)
-            results = search_tp_in_data(text, data, 'Наименование ТП')
-            
-            # Удаляем анимированное сообщение
-            await loading_msg.delete()
-            
-            if not results:
-                await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
-                return
-            
-            # Группируем результаты по ТП
-            tp_list = list(set([r['Наименование ТП'] for r in results]))
-            
-            if len(tp_list) == 1:
-                # Если найдена только одна ТП, сразу показываем результаты
-                await show_tp_results(update, results, tp_list[0])
-            else:
-                # Показываем список найденных ТП
-                keyboard = []
-                for tp in tp_list[:10]:  # Ограничиваем 10 результатами
-                    keyboard.append([tp])
-                keyboard.append(['⬅️ Назад'])
-                
-                user_states[user_id]['search_results'] = results
-                user_states[user_id]['action'] = 'select_tp'
-                
-                await update.message.reply_text(
-                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-        
-        elif user_states[user_id].get
+    )

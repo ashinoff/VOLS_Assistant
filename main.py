@@ -274,8 +274,8 @@ def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
     # Телефоны контрагентов
     keyboard.append(['📞 ТЕЛЕФОНЫ КОНТРАГЕНТОВ'])
     
-    # Отчеты - показываем только если есть права
-    if res == 'All' and visibility in ['All', 'RK', 'UG']:
+    # Отчеты - показываем только если филиал = All
+    if branch == 'All' and visibility in ['All', 'RK', 'UG']:
         keyboard.append(['📊 ОТЧЕТЫ'])
     
     # Справка
@@ -720,7 +720,7 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
 - РЭС из справочника: "{res_from_reference}"
 - Всего пользователей в базе: {len(users_cache)}"""
     
-    # Очищаем состояние
+    # Очищаем состояние и возвращаемся в меню филиала
     user_states[user_id] = {'state': f'branch_{branch}', 'branch': branch, 'network': network}
     
     await update.message.reply_text(
@@ -732,18 +732,16 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
     """Генерация отчета"""
     try:
         user_id = str(update.effective_user.id)
+        
+        # Проверяем права доступа
+        if permissions['branch'] != 'All':
+            await update.message.reply_text("❌ У вас нет доступа к отчетам")
+            return
+        
         notifications = notifications_storage[network]
         
         if not notifications:
             await update.message.reply_text("📊 Нет данных для отчета")
-            return
-        
-        # Фильтруем уведомления в зависимости от прав
-        if permissions['branch'] != 'All':
-            notifications = [n for n in notifications if n['branch'] == permissions['branch']]
-        
-        if not notifications:
-            await update.message.reply_text("📊 Нет данных для отчета по вашему филиалу")
             return
         
         # Показываем анимированное сообщение
@@ -857,6 +855,11 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
     try:
         user_id = str(update.effective_user.id)
         
+        # Проверяем права доступа
+        if permissions['branch'] != 'All':
+            await update.message.reply_text("❌ У вас нет доступа к отчетам")
+            return
+        
         # Показываем анимированное сообщение
         loading_msg = await update.message.reply_text("📈 Формирую полный отчет активности...")
         
@@ -866,10 +869,6 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
         for uid, user_info in users_cache.items():
             # Фильтруем по сети
             if user_info.get('visibility') not in ['All', network]:
-                continue
-            
-            # Фильтруем по филиалу если нужно
-            if permissions['branch'] != 'All' and user_info.get('branch') != 'All' and user_info.get('branch') != permissions['branch']:
                 continue
             
             # Получаем данные активности
@@ -1016,28 +1015,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Обработка кнопки Назад
     if text == '⬅️ Назад':
-        if state in ['rosseti_kuban', 'rosseti_yug', 'reports', 'reference', 'phones', 'settings']:
+        if state in ['rosseti_kuban', 'rosseti_yug', 'reports', 'phones', 'settings']:
             user_states[user_id] = {'state': 'main'}
             await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
+        elif state == 'reference':
+            # Проверяем, откуда пришли в справку
+            previous_state = user_states[user_id].get('previous_state')
+            if previous_state and previous_state.startswith('branch_'):
+                # Возвращаемся в меню филиала
+                branch = user_states[user_id].get('branch')
+                user_states[user_id]['state'] = previous_state
+                await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
+            else:
+                # Возвращаемся в главное меню
+                user_states[user_id] = {'state': 'main'}
+                await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
         elif state == 'document_actions':
-            user_states[user_id]['state'] = 'reference'
+            # Сохраняем previous_state при возврате в справку
+            previous_state = user_states[user_id].get('previous_state')
+            branch = user_states[user_id].get('branch')
+            network = user_states[user_id].get('network')
+            user_states[user_id] = {
+                'state': 'reference',
+                'previous_state': previous_state,
+                'branch': branch,
+                'network': network
+            }
             await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
         elif state == 'report_actions':
             user_states[user_id]['state'] = 'reports'
             await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
         elif state.startswith('branch_'):
-            network = user_states[user_id].get('network')
-            if network == 'RK':
-                user_states[user_id] = {'state': 'rosseti_kuban', 'network': 'RK'}
-                branches = ROSSETI_KUBAN_BRANCHES
+            # Проверяем права пользователя
+            if permissions['branch'] != 'All':
+                # Если доступен только один филиал, возвращаемся в главное меню
+                user_states[user_id] = {'state': 'main'}
+                await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
             else:
-                user_states[user_id] = {'state': 'rosseti_yug', 'network': 'UG'}
-                branches = ROSSETI_YUG_BRANCHES
-            await update.message.reply_text("Выберите филиал", reply_markup=get_branch_keyboard(branches))
+                # Если доступны все филиалы, возвращаемся к выбору филиала
+                network = user_states[user_id].get('network')
+                if network == 'RK':
+                    user_states[user_id] = {'state': 'rosseti_kuban', 'network': 'RK'}
+                    branches = ROSSETI_KUBAN_BRANCHES
+                else:
+                    user_states[user_id] = {'state': 'rosseti_yug', 'network': 'UG'}
+                    branches = ROSSETI_YUG_BRANCHES
+                await update.message.reply_text("Выберите филиал", reply_markup=get_branch_keyboard(branches))
         elif state in ['search_tp', 'send_notification']:
             branch = user_states[user_id].get('branch')
             user_states[user_id]['state'] = f'branch_{branch}'
-            await update.message.reply_text("Меню филиала", reply_markup=get_branch_menu_keyboard())
+            await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
         return
     
     # Главное меню
@@ -1054,7 +1081,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Если доступен только один филиал
                     user_states[user_id] = {'state': f'branch_{permissions["branch"]}', 'branch': permissions['branch'], 'network': 'RK'}
                     await update.message.reply_text(
-                        f"Меню филиала {permissions['branch']}",
+                        f"{permissions['branch']}",
                         reply_markup=get_branch_menu_keyboard()
                     )
         
@@ -1069,7 +1096,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     user_states[user_id] = {'state': f'branch_{permissions["branch"]}', 'branch': permissions['branch'], 'network': 'UG'}
                     await update.message.reply_text(
-                        f"Меню филиала {permissions['branch']}",
+                        f"{permissions['branch']}",
                         reply_markup=get_branch_menu_keyboard()
                     )
         
@@ -1104,7 +1131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['state'] = f'branch_{branch}'
             user_states[user_id]['branch'] = branch
             await update.message.reply_text(
-                f"Меню филиала {branch}",
+                f"{branch}",
                 reply_markup=get_branch_menu_keyboard()
             )
     
@@ -1129,7 +1156,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         
         elif text == 'ℹ️ Справка':
-            user_states[user_id]['state'] = 'reference'
+            # Сохраняем текущее состояние и данные филиала
+            current_data = user_states.get(user_id, {}).copy()
+            user_states[user_id] = {
+                'state': 'reference',
+                'previous_state': state,
+                'branch': current_data.get('branch'),
+                'network': current_data.get('network')
+            }
             await update.message.reply_text(
                 "Выберите документ",
                 reply_markup=get_reference_keyboard()
@@ -1410,14 +1444,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not user_email:
                 await update.message.reply_text(
                     "❌ У вас не указан email в системе.\n"
-                    "Обратитесь к администратору для добавления email."
+                    "Обратитесь к администратору для добавления email.",
+                    reply_markup=get_document_action_keyboard()
                 )
                 return
             
             # Получаем информацию о документе
             doc_info = user_states[user_id].get('current_document')
             if not doc_info:
-                await update.message.reply_text("❌ Документ не найден")
+                await update.message.reply_text(
+                    "❌ Документ не найден",
+                    reply_markup=get_document_action_keyboard()
+                )
                 return
             
             # Показываем анимированное сообщение
@@ -1482,6 +1520,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ Ошибка при отправке документа",
                     reply_markup=get_document_action_keyboard()
                 )
+            return  # Важно: добавляем return чтобы не продолжать обработку
     
     # Действия с отчетами
     elif state == 'report_actions':
@@ -1492,14 +1531,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not user_email:
                 await update.message.reply_text(
                     "❌ У вас не указан email в системе.\n"
-                    "Обратитесь к администратору для добавления email."
+                    "Обратитесь к администратору для добавления email.",
+                    reply_markup=get_report_action_keyboard()
                 )
                 return
             
             # Получаем информацию об отчете
             report_info = user_states[user_id].get('last_report')
             if not report_info:
-                await update.message.reply_text("❌ Отчет не найден")
+                await update.message.reply_text(
+                    "❌ Отчет не найден", 
+                    reply_markup=get_report_action_keyboard()
+                )
                 return
             
             # Показываем анимированное сообщение
@@ -1551,6 +1594,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ Ошибка при отправке отчета",
                     reply_markup=get_report_action_keyboard()
                 )
+            return  # Важно: добавляем return чтобы не продолжать обработку
     
     # Отчеты
     elif state == 'reports':
@@ -1621,7 +1665,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await loading_msg.delete()
                         
                         # Сохраняем информацию о документе в состоянии
+                        previous_state = user_states[user_id].get('previous_state')
+                        branch = user_states[user_id].get('branch')
+                        network = user_states[user_id].get('network')
+                        
                         user_states[user_id]['state'] = 'document_actions'
+                        user_states[user_id]['previous_state'] = previous_state
+                        user_states[user_id]['branch'] = branch
+                        user_states[user_id]['network'] = network
                         user_states[user_id]['current_document'] = {
                             'name': doc_name,
                             'url': doc_url,

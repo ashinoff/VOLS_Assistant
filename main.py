@@ -3,8 +3,6 @@ import logging
 import csv
 import io
 import re
-import uuid
-import ssl
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 import requests
@@ -17,7 +15,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
-from email.utils import formatdate
 import asyncio
 import aiohttp
 import pytz
@@ -33,8 +30,8 @@ PORT = int(os.environ.get('PORT', 5000))
 ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
 
 # Email настройки
-SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.mail.ru')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', '465'))
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.yandex.ru')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SMTP_EMAIL = os.environ.get('SMTP_EMAIL')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 
@@ -383,7 +380,6 @@ def get_reference_keyboard() -> ReplyKeyboardMarkup:
 def get_document_action_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура действий с документом"""
     keyboard = [
-        ['📧 Отправить на почту'],
         ['⬅️ Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -396,60 +392,21 @@ def get_after_search_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_report_action_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура действий с отчетом"""
-    keyboard = [
-        ['📧 Отправить отчет на почту'],
-        ['⬅️ Назад']
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
 async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
-    """Отправка email через SMTP с защитой от спам-фильтров"""
+    """Отправка email через SMTP"""
     if not SMTP_EMAIL or not SMTP_PASSWORD:
         logger.error("Email настройки не заданы")
         return False
     
     try:
         # Создаем сообщение
-        msg = MIMEMultipart('alternative')
-        msg['From'] = f"ВОЛС Ассистент <{SMTP_EMAIL}>"
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_EMAIL
         msg['To'] = to_email
         msg['Subject'] = subject
-        msg['Reply-To'] = SMTP_EMAIL
         
-        # Добавляем заголовки для предотвращения блокировки
-        msg['Message-ID'] = f"<{uuid.uuid4()}@{SMTP_EMAIL.split('@')[1]}>"
-        msg['Date'] = formatdate(localtime=True)
-        msg['X-Mailer'] = 'VOLS Assistant Bot v1.0'
-        msg['X-Priority'] = '3'  # Нормальный приоритет
-        msg['Importance'] = 'Normal'
-        
-        # Создаем HTML версию письма
-        body_html = body.replace('\n', '<br>')
-        html_body = f"""
-        <html>
-        <head>
-            <meta charset="utf-8">
-        </head>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
-                    <h2 style="color: #2c3e50; margin-bottom: 20px;">ВОЛС Ассистент</h2>
-                    <div style="white-space: pre-wrap;">{body_html}</div>
-                </div>
-                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
-                    <p>Это автоматическое сообщение от системы ВОЛС Ассистент.</p>
-                    <p>Пожалуйста, не отвечайте на это письмо.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        # Добавляем текстовую и HTML версии
+        # Добавляем текст
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
         
         # Добавляем вложение если есть
         if attachment_data and attachment_name:
@@ -482,12 +439,10 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
             part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
             msg.attach(part)
         
-        # Добавляем небольшую задержку для предотвращения блокировки
-        await asyncio.sleep(0.5)
-        
         # Отправляем (разная логика для разных портов)
         if SMTP_PORT == 465:
             # SSL соединение (Mail.ru)
+            import ssl
             context = ssl.create_default_context()
             with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
                 server.login(SMTP_EMAIL, SMTP_PASSWORD)
@@ -678,13 +633,11 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Отправляем email если есть адрес
             if responsible['email']:
-                email_subject = f"Уведомление ВОЛС: {selected_tp}"
-                email_body = f"""Уважаемый(ая) {responsible['name']}!
+                email_subject = f"ВОЛС: Уведомление от {sender_info['name']}"
+                email_body = f"""Добрый день, {responsible['name']}!
 
 Получено новое уведомление о бездоговорном ВОЛС.
 
-ДЕТАЛИ УВЕДОМЛЕНИЯ:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Филиал: {branch}
 РЭС: {res_from_reference}
 ТП: {selected_tp}
@@ -696,32 +649,21 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if location:
                     lat = location.get('latitude')
                     lon = location.get('longitude')
-                    email_body += f"""
-
-МЕСТОПОЛОЖЕНИЕ:
-Координаты: {lat:.6f}, {lon:.6f}
-Ссылка на карту: https://maps.google.com/?q={lat},{lon}"""
+                    email_body += f"\n\nКоординаты: {lat:.6f}, {lon:.6f}"
+                    email_body += f"\nСсылка на карту: https://maps.google.com/?q={lat},{lon}"
                 
                 if comment:
-                    email_body += f"""
-
-КОММЕНТАРИЙ:
-{comment}"""
+                    email_body += f"\n\nКомментарий: {comment}"
                     
                 if photo_id:
-                    email_body += """
-
-К уведомлению приложено фото (доступно в Telegram)"""
+                    email_body += f"\n\nК уведомлению приложено фото (доступно в Telegram)"
                 
-                email_body += """
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                email_body += f"""
 
 Для просмотра деталей и фотографий откройте Telegram.
 
----
 С уважением,
-Система ВОЛС Ассистент
-Автоматизированная система контроля ВОЛС"""
+Бот ВОЛС Ассистент"""
                 
                 # Исправлено: отправляем email асинхронно
                 email_sent = await send_email(responsible['email'], email_subject, email_body)
@@ -883,25 +825,8 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         # Создаем InputFile для правильной отправки
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
-            caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"
-        )
-        
-        # Сохраняем последний отчет пользователя
-        output.seek(0)
-        last_reports[user_id] = {
-            'data': BytesIO(output.read()),
-            'filename': filename,
-            'type': f"Уведомления {network_name}",
-            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
-        }
-        
-        # Устанавливаем состояние для действий с отчетом
-        user_states[user_id]['state'] = 'report_actions'
-        
-        # Показываем кнопки действий с отчетом
-        await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_report_action_keyboard()
+            caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК",
+            reply_markup=get_reports_keyboard(permissions)
         )
                 
     except Exception as e:
@@ -1039,25 +964,8 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
         
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
-            caption=caption
-        )
-        
-        # Сохраняем последний отчет
-        output.seek(0)
-        last_reports[user_id] = {
-            'data': BytesIO(output.read()),
-            'filename': filename,
-            'type': f"Полный реестр активности {network_name}",
-            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
-        }
-        
-        # Устанавливаем состояние для действий с отчетом
-        user_states[user_id]['state'] = 'report_actions'
-        
-        # Показываем кнопки действий
-        await update.message.reply_text(
-            "Выберите действие:",
-            reply_markup=get_report_action_keyboard()
+            caption=caption,
+            reply_markup=get_reports_keyboard(permissions)
         )
         
     except Exception as e:
@@ -1089,9 +997,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif state == 'document_actions':
             user_states[user_id]['state'] = 'reference'
             await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
-        elif state == 'report_actions':
-            user_states[user_id]['state'] = 'reports'
-            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
         elif state.startswith('branch_'):
             network = user_states[user_id].get('network')
             if network == 'RK':
@@ -1479,61 +1384,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == '📈 Активность РОССЕТИ ЮГ':
             await generate_activity_report(update, context, 'UG', permissions)
     
-    # Действия с отчетом
-    elif state == 'report_actions':
-        if text == '📧 Отправить отчет на почту':
-            user_data = users_cache.get(user_id, {})
-            user_email = user_data.get('email', '')
-            
-            if not user_email:
-                await update.message.reply_text("❌ У вас не указан email в системе")
-                return
-            
-            # Получаем последний отчет
-            last_report = last_reports.get(user_id)
-            if last_report:
-                # Показываем сообщение о процессе отправки
-                sending_msg = await update.message.reply_text("📧 Отправляю отчет на почту...")
-                
-                report_data = last_report['data']
-                report_name = last_report['filename']
-                report_type = last_report['type']
-                
-                subject = f"Отчет ВОЛС: {report_type}"
-                body = f"""Уважаемый(ая) {user_data.get('name', '')}!
-
-Вы запросили отправку отчета из системы ВОЛС Ассистент.
-
-Детали отчета:
-- Тип: {report_type}
-- Дата формирования: {last_report['datetime']} МСК
-- Файл: {report_name}
-
-Отчет находится во вложении к данному письму.
-
----
-С уважением,
-Система ВОЛС Ассистент
-Автоматизированная система контроля ВОЛС"""
-                
-                report_data.seek(0)
-                if await send_email(user_email, subject, body, report_data, report_name):
-                    await sending_msg.delete()
-                    await update.message.reply_text(
-                        f"✅ Отчет успешно отправлен на {user_email}",
-                        reply_markup=get_reports_keyboard(permissions)
-                    )
-                    # Возвращаемся в меню отчетов
-                    user_states[user_id]['state'] = 'reports'
-                else:
-                    await sending_msg.delete()
-                    await update.message.reply_text(
-                        "❌ Ошибка отправки отчета.\n"
-                        "Возможно, ваш email-провайдер временно блокирует отправку.\n"
-                        "Попробуйте через несколько минут.",
-                        reply_markup=get_report_action_keyboard()
-                    )
-    
     # Справка
     elif state == 'reference':
         if text.startswith('📄 ') or text.startswith('📊 '):
@@ -1601,7 +1451,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         # Показываем кнопки действий
                         await update.message.reply_text(
-                            "Выберите действие с документом:",
+                            "Документ загружен",
                             reply_markup=get_document_action_keyboard()
                         )
                     else:
@@ -1620,98 +1470,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             else:
                 await update.message.reply_text(f"❌ Документ не найден")
-    
-    # Действия с документом
-    elif state == 'document_actions':
-        if text == '📧 Отправить на почту':
-            user_data = users_cache.get(user_id, {})
-            user_email = user_data.get('email', '')
-            
-            if not user_email:
-                await update.message.reply_text("❌ У вас не указан email в системе")
-                return
-            
-            doc_info = user_states[user_id].get('current_document', {})
-            doc_name = doc_info.get('name', '')
-            doc_url = doc_info.get('url', '')
-            doc_filename = doc_info.get('filename', '')
-            
-            if doc_name and doc_url:
-                # Показываем сообщение о загрузке
-                loading_msg = await update.message.reply_text("⏳ Подготавливаю документ для отправки...")
-                
-                try:
-                    # Получаем документ из кэша
-                    document = await get_cached_document(doc_name, doc_url)
-                    
-                    if document:
-                        subject = f"Документ ВОЛС: {doc_name}"
-                        body = f"""Уважаемый(ая) {user_data.get('name', '')}!
-
-Вы запросили отправку документа из системы ВОЛС Ассистент.
-
-Документ: {doc_name}
-Дата запроса: {get_moscow_time().strftime('%d.%m.%Y %H:%M')} МСК
-
-Документ находится во вложении к данному письму.
-
----
-С уважением,
-Система ВОЛС Ассистент
-Автоматизированная система контроля ВОЛС"""
-                        
-                        document.seek(0)
-                        if await send_email(user_email, subject, body, document, doc_filename):
-                            await loading_msg.delete()
-                            await update.message.reply_text(
-                                f"✅ Документ отправлен на {user_email}",
-                                reply_markup=get_reference_keyboard()
-                            )
-                            # Возвращаемся в меню справки
-                            user_states[user_id]['state'] = 'reference'
-                        else:
-                            await loading_msg.delete()
-                            await update.message.reply_text(
-                                "❌ Ошибка отправки. Возможно, ваш email-провайдер временно блокирует отправку.\n"
-                                "Попробуйте через несколько минут.",
-                                reply_markup=get_document_action_keyboard()
-                            )
-                    else:
-                        await loading_msg.delete()
-                        # Если не удалось загрузить файл, отправляем ссылку
-                        subject = f"Документ ВОЛС: {doc_name}"
-                        body = f"""Уважаемый(ая) {user_data.get('name', '')}!
-
-Вы запросили документ "{doc_name}" через систему ВОЛС Ассистент.
-
-Ссылка для скачивания: {doc_url}
-
-Дата запроса: {get_moscow_time().strftime('%d.%m.%Y %H:%M')} МСК
-
----
-С уважением,
-Система ВОЛС Ассистент
-Автоматизированная система контроля ВОЛС"""
-                        
-                        if await send_email(user_email, subject, body):
-                            await update.message.reply_text(
-                                f"✅ Ссылка на документ отправлена на {user_email}",
-                                reply_markup=get_reference_keyboard()
-                            )
-                            user_states[user_id]['state'] = 'reference'
-                        else:
-                            await update.message.reply_text(
-                                "❌ Ошибка отправки.",
-                                reply_markup=get_document_action_keyboard()
-                            )
-                            
-                except Exception as e:
-                    logger.error(f"Ошибка отправки документа на почту: {e}")
-                    await loading_msg.delete()
-                    await update.message.reply_text(
-                        "❌ Ошибка отправки документа",
-                        reply_markup=get_document_action_keyboard()
-                    )
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""

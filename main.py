@@ -30,8 +30,8 @@ PORT = int(os.environ.get('PORT', 5000))
 ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
 
 # Email настройки
-SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.yandex.ru')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.mail.ru')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_EMAIL = os.environ.get('SMTP_EMAIL')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 
@@ -1028,8 +1028,8 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
         caption = f"""📈 Полный отчет активности {network_name}
 
 👥 Всего пользователей: {len(df)}
-✅ Активных: {active_count} (нежно-зеленый)
-❌ Неактивных: {inactive_count} (нежно-красный)
+✅ Активных: {active_count} (зеленый)
+❌ Неактивных: {inactive_count} (красный)
 
 📊 Отчет содержит полный реестр пользователей с цветовой индикацией активности
 🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"""
@@ -1293,7 +1293,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             search_messages = [
                 "🔍 Ищу информацию...",
                 "📡 Подключаюсь к базе данных...",
-                "⚡ Сканирую электросети...",
                 "📊 Анализирую данные...",
                 "🔄 Обрабатываю результаты..."
             ]
@@ -1378,7 +1377,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔍 Поиск в справочнике...",
             "📋 Проверяю базу данных...",
             "🌐 Загружаю информацию...",
-            "✨ Почти готово..."
         ]
         
         loading_msg = await update.message.reply_text(notification_messages[0])

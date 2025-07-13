@@ -33,8 +33,8 @@ PORT = int(os.environ.get('PORT', 5000))
 ZONES_CSV_URL = os.environ.get('ZONES_CSV_URL')
 
 # Email настройки
-SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.yandex.ru')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.mail.ru')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_EMAIL = os.environ.get('SMTP_EMAIL')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD')
 

@@ -392,21 +392,61 @@ def get_after_search_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+def get_report_action_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура действий с отчетом"""
+    keyboard = [
+        ['📧 Отправить отчет на почту'],
+        ['⬅️ Назад']
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
-    """Отправка email через SMTP"""
+    """Отправка email через SMTP с защитой от спам-фильтров"""
     if not SMTP_EMAIL or not SMTP_PASSWORD:
         logger.error("Email настройки не заданы")
         return False
     
     try:
         # Создаем сообщение
-        msg = MIMEMultipart()
-        msg['From'] = SMTP_EMAIL
+        msg = MIMEMultipart('alternative')
+        msg['From'] = f"ВОЛС Ассистент <{SMTP_EMAIL}>"
         msg['To'] = to_email
         msg['Subject'] = subject
+        msg['Reply-To'] = SMTP_EMAIL
         
-        # Добавляем текст
+        # Добавляем заголовки для предотвращения блокировки
+        import uuid
+        from email.utils import formatdate
+        msg['Message-ID'] = f"<{uuid.uuid4()}@{SMTP_EMAIL.split('@')[1]}>"
+        msg['Date'] = formatdate(localtime=True)
+        msg['X-Mailer'] = 'VOLS Assistant Bot v1.0'
+        msg['X-Priority'] = '3'  # Нормальный приоритет
+        msg['Importance'] = 'Normal'
+        
+        # Создаем HTML версию письма
+        html_body = f"""
+        <html>
+        <head>
+            <meta charset="utf-8">
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #f8f9fa; padding: 20px; border-radius: 10px;">
+                    <h2 style="color: #2c3e50; margin-bottom: 20px;">ВОЛС Ассистент</h2>
+                    <div style="white-space: pre-wrap;">{body.replace('\n', '<br>')}</div>
+                </div>
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
+                    <p>Это автоматическое сообщение от системы ВОЛС Ассистент.</p>
+                    <p>Пожалуйста, не отвечайте на это письмо.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Добавляем текстовую и HTML версии
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        msg.attach(MIMEText(html_body, 'html', 'utf-8'))
         
         # Добавляем вложение если есть
         if attachment_data and attachment_name:
@@ -438,6 +478,9 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
             part.add_header('Content-Type', mime_type)
             part.add_header('Content-Disposition', f'attachment; filename="{attachment_name}"')
             msg.attach(part)
+        
+        # Добавляем небольшую задержку для предотвращения блокировки
+        await asyncio.sleep(0.5)
         
         # Отправляем (разная логика для разных портов)
         if SMTP_PORT == 465:
@@ -472,7 +515,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Пользователь {user_id} ({update.effective_user.first_name}) запустил бота")
     
     if not permissions['visibility']:
+        await update.message.reply_document(
+            document=InputFile(output, filename=filename),
+            caption=caption
+        )
+        
+        # Сохраняем последний отчет
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Полный реестр активности {network_name}",
+            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий
         await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
+        )eply_text(
             f"❌ У вас нет доступа к боту.\n"
             f"Ваш ID: {user_id}\n"
             f"Обратитесь к администратору для получения прав."
@@ -825,8 +889,25 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         # Создаем InputFile для правильной отправки
         await update.message.reply_document(
             document=InputFile(output, filename=filename),
-            caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК",
-            reply_markup=get_reports_keyboard(permissions)
+            caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"
+        )
+        
+        # Сохраняем последний отчет пользователя
+        output.seek(0)
+        last_reports[user_id] = {
+            'data': BytesIO(output.read()),
+            'filename': filename,
+            'type': f"Уведомления {network_name}",
+            'datetime': moscow_time.strftime('%d.%m.%Y %H:%M')
+        }
+        
+        # Устанавливаем состояние для действий с отчетом
+        user_states[user_id]['state'] = 'report_actions'
+        
+        # Показываем кнопки действий с отчетом
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_report_action_keyboard()
         )
                 
     except Exception as e:

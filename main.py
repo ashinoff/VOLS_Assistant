@@ -143,35 +143,56 @@ async def get_cached_document(doc_name: str, doc_url: str) -> Optional[BytesIO]:
 
 def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False) -> str:
     """Получить ключ переменной окружения для филиала"""
+    logger.info(f"get_env_key_for_branch вызван с параметрами: branch='{branch}', network='{network}', is_reference={is_reference}")
+    
     # Транслитерация русских названий в латиницу
     translit_map = {
         'Юго-Западные': 'YUGO_ZAPADNYE',
         'Усть-Лабинские': 'UST_LABINSKIE', 
         'Тимашевские': 'TIMASHEVSKIE',
+        'Тимашевский': 'TIMASHEVSKIE',  # Добавляем вариант в единственном числе
         'Тихорецкие': 'TIKHORETSKIE',
+        'Тихорецкий': 'TIKHORETSKIE',   # Добавляем вариант в единственном числе
         'Сочинские': 'SOCHINSKIE',
+        'Сочинский': 'SOCHINSKIE',       # Добавляем вариант в единственном числе
         'Славянские': 'SLAVYANSKIE',
+        'Славянский': 'SLAVYANSKIE',     # Добавляем вариант в единственном числе
         'Ленинградские': 'LENINGRADSKIE',
+        'Ленинградский': 'LENINGRADSKIE', # Добавляем вариант в единственном числе
         'Лабинские': 'LABINSKIE',
+        'Лабинский': 'LABINSKIE',         # Добавляем вариант в единственном числе
         'Краснодарские': 'KRASNODARSKIE',
+        'Краснодарский': 'KRASNODARSKIE', # Добавляем вариант в единственном числе
         'Армавирские': 'ARMAVIRSKIE',
+        'Армавирский': 'ARMAVIRSKIE',     # Добавляем вариант в единственном числе
         'Адыгейские': 'ADYGEYSKIE',
+        'Адыгейский': 'ADYGEYSKIE',       # Добавляем вариант в единственном числе
         'Центральные': 'TSENTRALNYE',
+        'Центральный': 'TSENTRALNYE',     # Добавляем вариант в единственном числе
         'Западные': 'ZAPADNYE',
+        'Западный': 'ZAPADNYE',           # Добавляем вариант в единственном числе
         'Восточные': 'VOSTOCHNYE',
+        'Восточный': 'VOSTOCHNYE',       # Добавляем вариант в единственном числе
         'Южные': 'YUZHNYE',
+        'Южный': 'YUZHNYE',              # Добавляем вариант в единственном числе
         'Северо-Восточные': 'SEVERO_VOSTOCHNYE',
+        'Северо-Восточный': 'SEVERO_VOSTOCHNYE', # Добавляем вариант в единственном числе
         'Юго-Восточные': 'YUGO_VOSTOCHNYE',
-        'Северные': 'SEVERNYE'
+        'Юго-Восточный': 'YUGO_VOSTOCHNYE',      # Добавляем вариант в единственном числе
+        'Северные': 'SEVERNYE',
+        'Северный': 'SEVERNYE'            # Добавляем вариант в единственном числе
     }
     
     # Убираем "ЭС" и ищем в словаре транслитерации
     branch_clean = branch.replace(' ЭС', '').strip()
+    logger.info(f"Очищенное название филиала: '{branch_clean}'")
+    
     branch_key = translit_map.get(branch_clean, branch_clean.upper().replace(' ', '_').replace('-', '_'))
+    logger.info(f"Ключ после транслитерации: '{branch_key}'")
     
     suffix = f"_{network}_SP" if is_reference else f"_{network}"
     env_key = f"{branch_key}_URL{suffix}"
-    logger.info(f"Ищем переменную окружения: {env_key} для филиала: {branch}")
+    logger.info(f"Итоговый ключ переменной окружения: {env_key}")
     return env_key
 
 def load_csv_from_url(url: str) -> List[Dict]:
@@ -228,6 +249,41 @@ def get_user_permissions(user_id: str) -> Dict:
         'name': 'Неизвестный',
         'responsible': None
     })
+
+def normalize_branch_name(branch_name: str) -> str:
+    """Нормализует название филиала к стандартному формату (множественное число)"""
+    # Словарь для преобразования единственного числа во множественное
+    singular_to_plural = {
+        'Тимашевский': 'Тимашевские',
+        'Тихорецкий': 'Тихорецкие',
+        'Сочинский': 'Сочинские',
+        'Славянский': 'Славянские',
+        'Ленинградский': 'Ленинградские',
+        'Лабинский': 'Лабинские',
+        'Краснодарский': 'Краснодарские',
+        'Армавирский': 'Армавирские',
+        'Адыгейский': 'Адыгейские',
+        'Центральный': 'Центральные',
+        'Западный': 'Западные',
+        'Восточный': 'Восточные',
+        'Южный': 'Южные',
+        'Северо-Восточный': 'Северо-Восточные',
+        'Юго-Восточный': 'Юго-Восточные',
+        'Северный': 'Северные',
+        'Юго-Западный': 'Юго-Западные',
+        'Усть-Лабинский': 'Усть-Лабинские'
+    }
+    
+    # Убираем ЭС для проверки
+    branch_clean = branch_name.replace(' ЭС', '').strip()
+    
+    # Если есть в словаре, преобразуем
+    if branch_clean in singular_to_plural:
+        normalized = singular_to_plural[branch_clean]
+        # Возвращаем с ЭС если было в оригинале
+        return f"{normalized} ЭС" if ' ЭС' in branch_name else normalized
+    
+    return branch_name  # Возвращаем как есть, если нет в словаре
 
 def normalize_tp_name(name: str) -> str:
     """Нормализовать название ТП для поиска"""
@@ -1079,9 +1135,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                 else:
                     # Если доступен только один филиал
-                    user_states[user_id] = {'state': f'branch_{permissions["branch"]}', 'branch': permissions['branch'], 'network': 'RK'}
+                    # Нормализуем название филиала к формату списка филиалов
+                    user_branch = permissions['branch']
+                    logger.info(f"Пользователь {user_id} имеет доступ только к филиалу: '{user_branch}'")
+                    
+                    # Ищем соответствующий филиал в списке
+                    normalized_branch = None
+                    user_branch_clean = user_branch.replace(' ЭС', '').strip()
+                    
+                    for kb_branch in ROSSETI_KUBAN_BRANCHES:
+                        kb_branch_clean = kb_branch.replace(' ЭС', '').strip()
+                        # Проверяем точное совпадение или начало
+                        if (kb_branch_clean == user_branch_clean or 
+                            kb_branch_clean.startswith(user_branch_clean) or
+                            user_branch_clean.startswith(kb_branch_clean)):
+                            normalized_branch = kb_branch
+                            break
+                    
+                    if not normalized_branch:
+                        logger.warning(f"Не найдено соответствие для филиала '{user_branch}' в списке РОССЕТИ КУБАНЬ")
+                        normalized_branch = user_branch  # Используем как есть, если не нашли
+                    else:
+                        logger.info(f"Филиал '{user_branch}' нормализован к '{normalized_branch}'")
+                    
+                    user_states[user_id] = {'state': f'branch_{normalized_branch}', 'branch': normalized_branch, 'network': 'RK'}
                     await update.message.reply_text(
-                        f"{permissions['branch']}",
+                        f"{normalized_branch}",
                         reply_markup=get_branch_menu_keyboard()
                     )
         
@@ -1094,9 +1173,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=get_branch_keyboard(ROSSETI_YUG_BRANCHES)
                     )
                 else:
-                    user_states[user_id] = {'state': f'branch_{permissions["branch"]}', 'branch': permissions['branch'], 'network': 'UG'}
+                    # Если доступен только один филиал
+                    # Нормализуем название филиала к формату списка филиалов
+                    user_branch = permissions['branch']
+                    logger.info(f"Пользователь {user_id} имеет доступ только к филиалу: '{user_branch}'")
+                    
+                    # Ищем соответствующий филиал в списке
+                    normalized_branch = None
+                    user_branch_clean = user_branch.replace(' ЭС', '').strip()
+                    
+                    for ug_branch in ROSSETI_YUG_BRANCHES:
+                        ug_branch_clean = ug_branch.replace(' ЭС', '').strip()
+                        # Проверяем точное совпадение или начало
+                        if (ug_branch_clean == user_branch_clean or 
+                            ug_branch_clean.startswith(user_branch_clean) or
+                            user_branch_clean.startswith(ug_branch_clean)):
+                            normalized_branch = ug_branch
+                            break
+                    
+                    if not normalized_branch:
+                        logger.warning(f"Не найдено соответствие для филиала '{user_branch}' в списке РОССЕТИ ЮГ")
+                        normalized_branch = user_branch  # Используем как есть, если не нашли
+                    else:
+                        logger.info(f"Филиал '{user_branch}' нормализован к '{normalized_branch}'")
+                    
+                    user_states[user_id] = {'state': f'branch_{normalized_branch}', 'branch': normalized_branch, 'network': 'UG'}
                     await update.message.reply_text(
-                        f"{permissions['branch']}",
+                        f"{normalized_branch}",
                         reply_markup=get_branch_menu_keyboard()
                     )
         
@@ -1182,6 +1285,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             branch = user_states[user_id].get('branch')
             network = user_states[user_id].get('network')
             
+            # Нормализуем название филиала
+            branch = normalize_branch_name(branch)
             logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
             
             # Показываем анимированное сообщение

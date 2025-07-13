@@ -383,6 +383,7 @@ def get_reference_keyboard() -> ReplyKeyboardMarkup:
 def get_document_action_keyboard() -> ReplyKeyboardMarkup:
     """Клавиатура действий с документом"""
     keyboard = [
+        ['📧 Отправить на почту'],
         ['⬅️ Назад']
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -1600,7 +1601,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         # Показываем кнопки действий
                         await update.message.reply_text(
-                            "Документ загружен",
+                            "Выберите действие с документом:",
                             reply_markup=get_document_action_keyboard()
                         )
                     else:
@@ -1619,6 +1620,98 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             else:
                 await update.message.reply_text(f"❌ Документ не найден")
+    
+    # Действия с документом
+    elif state == 'document_actions':
+        if text == '📧 Отправить на почту':
+            user_data = users_cache.get(user_id, {})
+            user_email = user_data.get('email', '')
+            
+            if not user_email:
+                await update.message.reply_text("❌ У вас не указан email в системе")
+                return
+            
+            doc_info = user_states[user_id].get('current_document', {})
+            doc_name = doc_info.get('name', '')
+            doc_url = doc_info.get('url', '')
+            doc_filename = doc_info.get('filename', '')
+            
+            if doc_name and doc_url:
+                # Показываем сообщение о загрузке
+                loading_msg = await update.message.reply_text("⏳ Подготавливаю документ для отправки...")
+                
+                try:
+                    # Получаем документ из кэша
+                    document = await get_cached_document(doc_name, doc_url)
+                    
+                    if document:
+                        subject = f"Документ ВОЛС: {doc_name}"
+                        body = f"""Уважаемый(ая) {user_data.get('name', '')}!
+
+Вы запросили отправку документа из системы ВОЛС Ассистент.
+
+Документ: {doc_name}
+Дата запроса: {get_moscow_time().strftime('%d.%m.%Y %H:%M')} МСК
+
+Документ находится во вложении к данному письму.
+
+---
+С уважением,
+Система ВОЛС Ассистент
+Автоматизированная система контроля ВОЛС"""
+                        
+                        document.seek(0)
+                        if await send_email(user_email, subject, body, document, doc_filename):
+                            await loading_msg.delete()
+                            await update.message.reply_text(
+                                f"✅ Документ отправлен на {user_email}",
+                                reply_markup=get_reference_keyboard()
+                            )
+                            # Возвращаемся в меню справки
+                            user_states[user_id]['state'] = 'reference'
+                        else:
+                            await loading_msg.delete()
+                            await update.message.reply_text(
+                                "❌ Ошибка отправки. Возможно, ваш email-провайдер временно блокирует отправку.\n"
+                                "Попробуйте через несколько минут.",
+                                reply_markup=get_document_action_keyboard()
+                            )
+                    else:
+                        await loading_msg.delete()
+                        # Если не удалось загрузить файл, отправляем ссылку
+                        subject = f"Документ ВОЛС: {doc_name}"
+                        body = f"""Уважаемый(ая) {user_data.get('name', '')}!
+
+Вы запросили документ "{doc_name}" через систему ВОЛС Ассистент.
+
+Ссылка для скачивания: {doc_url}
+
+Дата запроса: {get_moscow_time().strftime('%d.%m.%Y %H:%M')} МСК
+
+---
+С уважением,
+Система ВОЛС Ассистент
+Автоматизированная система контроля ВОЛС"""
+                        
+                        if await send_email(user_email, subject, body):
+                            await update.message.reply_text(
+                                f"✅ Ссылка на документ отправлена на {user_email}",
+                                reply_markup=get_reference_keyboard()
+                            )
+                            user_states[user_id]['state'] = 'reference'
+                        else:
+                            await update.message.reply_text(
+                                "❌ Ошибка отправки.",
+                                reply_markup=get_document_action_keyboard()
+                            )
+                            
+                except Exception as e:
+                    logger.error(f"Ошибка отправки документа на почту: {e}")
+                    await loading_msg.delete()
+                    await update.message.reply_text(
+                        "❌ Ошибка отправки документа",
+                        reply_markup=get_document_action_keyboard()
+                    )
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     """Показать результаты поиска по ТП"""

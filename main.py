@@ -82,8 +82,8 @@ REFERENCE_DOCS = {
     'Отчет по контрагентам': os.environ.get('DOC_OTCHET_KONTRAGENTY_URL'),
 }
 
-# URL руководства пользователя
-USER_GUIDE_URL = os.environ.get('USER_GUIDE_URL', 'https://docs.google.com/document/d/YOUR_GUIDE_ID')
+# URL руководства пользователя (веб-страница)
+USER_GUIDE_URL = os.environ.get('USER_GUIDE_URL', 'https://your-domain.com/vols-guide')
 
 def get_moscow_time():
     """Получить текущее время в Москве"""
@@ -1377,7 +1377,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔍 Поиск в справочнике...",
             "📋 Проверяю базу данных...",
             "🌐 Загружаю информацию...",
-        ]
+            ]
         
         loading_msg = await update.message.reply_text(notification_messages[0])
         
@@ -1492,34 +1492,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Персональные настройки
     elif state == 'settings':
         if text == '📖 Руководство пользователя':
-            # Показываем сообщение о загрузке
-            loading_msg = await update.message.reply_text("⏳ Загружаю руководство пользователя...")
-            
-            try:
-                if USER_GUIDE_URL:
-                    # Получаем документ
-                    document = await get_cached_document('Руководство пользователя', USER_GUIDE_URL)
-                    
-                    if document:
-                        # Отправляем документ
-                        await update.message.reply_document(
-                            document=InputFile(document, filename="Руководство_пользователя.pdf"),
-                            caption="📖 Руководство пользователя"
-                        )
-                        await loading_msg.delete()
-                    else:
-                        await loading_msg.delete()
-                        await update.message.reply_text(
-                            f"❌ Не удалось загрузить руководство.\n\n"
-                            f"Вы можете открыть его по ссылке:\n{USER_GUIDE_URL}"
-                        )
-                else:
-                    await loading_msg.delete()
-                    await update.message.reply_text("❌ Ссылка на руководство не настроена в системе")
-            except Exception as e:
-                logger.error(f"Ошибка загрузки руководства: {e}")
-                await loading_msg.delete()
-                await update.message.reply_text("❌ Ошибка загрузки руководства")
+            if USER_GUIDE_URL:
+                # Создаем красивое сообщение с кнопкой
+                keyboard = [[InlineKeyboardButton("📖 Открыть руководство", url=USER_GUIDE_URL)]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    "📖 *Руководство пользователя ВОЛС Ассистент*\n\n"
+                    "Версия 2.0 • Июль 2025\n\n"
+                    "В руководстве вы найдете:\n"
+                    "• Пошаговые инструкции по работе\n"
+                    "• Описание всех функций\n"
+                    "• Ответы на частые вопросы\n"
+                    "• Контакты поддержки\n\n"
+                    "Нажмите кнопку ниже для просмотра:",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                await update.message.reply_text("❌ Ссылка на руководство не настроена в системе")
         
         elif text == 'ℹ️ Моя информация':
             user_data = users_cache.get(user_id, {})
@@ -1907,7 +1898,6 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📸 Сделайте фото бездоговорного ВОЛС\n\n"
             "Как отправить фото:\n"
             "📱 **Мобильный**: нажмите 📎 → Камера\n"
-            "💻 **Компьютер**: нажмите 📎 → Фото\n\n"
             "Или выберите действие ниже:",
             reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
             parse_mode='Markdown'

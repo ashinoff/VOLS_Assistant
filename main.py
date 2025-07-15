@@ -225,11 +225,24 @@ def load_users_data():
         for row in data:
             telegram_id = row.get('Telegram ID', '').strip()
             if telegram_id:
+                # Формируем полное ФИО из колонок E (ФИО) и I (Фамилия)
+                name_parts = []
+                fio = row.get('ФИО', '').strip()  # Колонка E - имя отчество
+                surname = row.get('Фамилия', '').strip()  # Колонка I - фамилия
+                
+                # Объединяем имя отчество и фамилию
+                if fio:
+                    name_parts.append(fio)
+                if surname:
+                    name_parts.append(surname)
+                
+                full_name = ' '.join(name_parts) if name_parts else 'Неизвестный'
+                
                 users_cache[telegram_id] = {
                     'visibility': row.get('Видимость', '').strip(),
                     'branch': row.get('Филиал', '').strip(),
                     'res': row.get('РЭС', '').strip(),
-                    'name': row.get('ФИО', '').strip(),
+                    'name': full_name,
                     'responsible': row.get('Ответственный', '').strip(),
                     'email': row.get('Email', '').strip()  # Добавляем email
                 }
@@ -637,8 +650,8 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if comment:
         notification_text += f"\n\n💬 Комментарий: {comment}"
     
-    # Формируем список получателей для записи в хранилище
-    recipients_info = ", ".join([f"{u['name']} ({u['id']})" for u in responsible_users]) if responsible_users else "Не найдены"
+    # Формируем список получателей для записи в хранилище (без ID)
+    recipients_info = ", ".join([u['name'] for u in responsible_users]) if responsible_users else "Не найдены"
     
     # Сохраняем уведомление в хранилище
     notification_data = {
@@ -822,7 +835,7 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         df = pd.DataFrame(notifications)
         
         # Проверяем наличие необходимых колонок
-        required_columns = ['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']
+        required_columns = ['branch', 'res', 'tp', 'vl', 'sender_name', 'recipient_name', 'datetime', 'coordinates']
         existing_columns = [col for col in required_columns if col in df.columns]
         
         if not existing_columns:
@@ -835,11 +848,11 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         # Переименовываем колонки
         column_mapping = {
             'branch': 'ФИЛИАЛ',
-            'res': 'РЭС', 
+            'res': 'РЭС',
+            'tp': 'ТП',
+            'vl': 'ВЛ',
             'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
-            'sender_id': 'ID ОТПРАВИТЕЛЯ',
             'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
-            'recipient_id': 'ID ПОЛУЧАТЕЛЯ',
             'datetime': 'ВРЕМЯ ДАТА',
             'coordinates': 'КООРДИНАТЫ'
         }
@@ -942,7 +955,6 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
             
             all_users_data.append({
                 'ФИО': user_info.get('name', 'Не указано'),
-                'Telegram ID': uid,
                 'Филиал': user_info.get('branch', '-'),
                 'РЭС': user_info.get('res', '-'),
                 'Ответственный': user_info.get('responsible', '-'),

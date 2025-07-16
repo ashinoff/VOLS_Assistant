@@ -281,7 +281,8 @@ def load_users_data():
                     'visibility': row.get('Видимость', '').strip(),
                     'branch': row.get('Филиал', '').strip(),
                     'res': row.get('РЭС', '').strip(),
-                    'name': full_name,
+                    'name': full_name,  # Полное ФИО для отчетов
+                    'name_without_surname': fio if fio else 'Неизвестный',  # Имя без фамилии для приветствия
                     'responsible': row.get('Ответственный', '').strip(),
                     'email': row.get('Email', '').strip()  # Добавляем email
                 }
@@ -296,7 +297,7 @@ def load_users_data():
         if users_cache:
             sample_users = list(users_cache.items())[:3]
             for uid, udata in sample_users:
-                logger.info(f"Пример пользователя: ID={uid}, visibility={udata.get('visibility')}, name={udata.get('name')}")
+                logger.info(f"Пример пользователя: ID={uid}, visibility={udata.get('visibility')}, name={udata.get('name')}, name_no_surname={udata.get('name_without_surname')}")
                 
     except Exception as e:
         logger.error(f"Ошибка загрузки данных пользователей: {e}", exc_info=True)
@@ -316,6 +317,7 @@ def get_user_permissions(user_id: str) -> Dict:
         'branch': None,
         'res': None,
         'name': 'Неизвестный',
+        'name_without_surname': 'Неизвестный',
         'responsible': None
     })
     
@@ -624,7 +626,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id] = {'state': 'main'}
     
     await update.message.reply_text(
-        f"👋 Добро пожаловать, {permissions['name']}!",
+        f"👋 Добро пожаловать, {permissions.get('name_without_surname', permissions.get('name', 'Пользователь'))}!",
         reply_markup=get_main_keyboard(permissions)
     )
 
@@ -1594,6 +1596,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             info_text = f"""ℹ️ Ваша информация:
 
 👤 ФИО: {user_data.get('name', 'Не указано')}
+📝 Имя (для приветствия): {user_data.get('name_without_surname', 'Не указано')}
 🆔 Telegram ID: {user_id}
 📧 Email: {user_data.get('email', 'Не указан')}
 

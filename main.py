@@ -61,7 +61,6 @@ user_states = {}
 
 # Кеш данных пользователей
 users_cache = {}
-users_cache_backup = {}  # Резервная копия кэша
 
 # Последние сгенерированные отчеты
 last_reports = {}
@@ -199,8 +198,7 @@ def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False
 def load_csv_from_url(url: str) -> List[Dict]:
     """Загрузить CSV файл по URL"""
     try:
-        logger.info(f"Загружаем CSV из {url}")
-        response = requests.get(url, timeout=30)
+        response = requests.get(url)
         response.raise_for_status()
         response.encoding = 'utf-8-sig'
         
@@ -213,115 +211,44 @@ def load_csv_from_url(url: str) -> List[Dict]:
             normalized_row = {key.strip(): value.strip() if value else '' for key, value in row.items()}
             data.append(normalized_row)
         
-        logger.info(f"Успешно загружено {len(data)} строк из CSV")
         return data
-    except requests.exceptions.Timeout:
-        logger.error(f"Таймаут при загрузке CSV из {url}")
-        return []
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Ошибка сети при загрузке CSV: {e}")
-        return []
     except Exception as e:
-        logger.error(f"Ошибка загрузки CSV: {e}", exc_info=True)
+        logger.error(f"Ошибка загрузки CSV: {e}")
         return []
 
 def load_users_data():
     """Загрузить данные пользователей из CSV"""
-    global users_cache, users_cache_backup
+    global users_cache
     try:
-        if not ZONES_CSV_URL:
-            logger.error("ZONES_CSV_URL не задан в переменных окружения!")
-            return
-            
-        logger.info(f"Начинаем загрузку данных из {ZONES_CSV_URL}")
         data = load_csv_from_url(ZONES_CSV_URL)
-        
-        if not data:
-            logger.error("Получен пустой список данных из CSV")
-            # Восстанавливаем из резервной копии
-            if users_cache_backup:
-                logger.warning("Используем резервную копию данных пользователей")
-                users_cache = users_cache_backup.copy()
-            return
-            
-        # Сохраняем текущий кэш как резервную копию перед обновлением
-        if users_cache:
-            users_cache_backup = users_cache.copy()
-            
         users_cache = {}
-        
-        # Логируем первую строку для проверки структуры
-        if data:
-            logger.info(f"Структура CSV (первая строка): {list(data[0].keys())}")
-        
         for row in data:
             telegram_id = row.get('Telegram ID', '').strip()
             if telegram_id:
-                # Формируем полное ФИО из колонок E (ФИО) и I (Фамилия)
-                name_parts = []
-                fio = row.get('ФИО', '').strip()  # Колонка E - имя отчество
-                
-                # Проверяем наличие колонки Фамилия
-                if 'Фамилия' in row:
-                    surname = row.get('Фамилия', '').strip()  # Колонка I - фамилия
-                else:
-                    surname = ''
-                    if telegram_id in ['248207151', '1409325335']:  # Логируем только для админов
-                        logger.warning("Колонка 'Фамилия' отсутствует в CSV файле")
-                
-                # Объединяем имя отчество и фамилию
-                if fio:
-                    name_parts.append(fio)
-                if surname:
-                    name_parts.append(surname)
-                
-                full_name = ' '.join(name_parts) if name_parts else 'Неизвестный'
-                
                 users_cache[telegram_id] = {
                     'visibility': row.get('Видимость', '').strip(),
                     'branch': row.get('Филиал', '').strip(),
                     'res': row.get('РЭС', '').strip(),
-                    'name': full_name,
+                    'name': row.get('ФИО', '').strip(),
                     'responsible': row.get('Ответственный', '').strip(),
                     'email': row.get('Email', '').strip()  # Добавляем email
                 }
-        
-        # Создаем резервную копию успешно загруженных данных
-        if users_cache:
-            users_cache_backup = users_cache.copy()
-            
         logger.info(f"Загружено {len(users_cache)} пользователей")
-        
-        # Логируем несколько примеров для проверки
-        if users_cache:
-            sample_users = list(users_cache.items())[:3]
-            for uid, udata in sample_users:
-                logger.info(f"Пример пользователя: ID={uid}, visibility={udata.get('visibility')}, name={udata.get('name')}")
-                
     except Exception as e:
-        logger.error(f"Ошибка загрузки данных пользователей: {e}", exc_info=True)
-        # При ошибке восстанавливаем из резервной копии
-        if users_cache_backup:
-            logger.warning("Восстанавливаем данные из резервной копии после ошибки")
-            users_cache = users_cache_backup.copy()
+        logger.error(f"Ошибка загрузки данных пользователей: {e}")
 
 def get_user_permissions(user_id: str) -> Dict:
     """Получить права пользователя"""
     if not users_cache:
-        logger.warning(f"users_cache пустой при запросе прав для пользователя {user_id}, пытаемся загрузить")
         load_users_data()
     
-    user_data = users_cache.get(str(user_id), {
+    return users_cache.get(str(user_id), {
         'visibility': None,
         'branch': None,
         'res': None,
         'name': 'Неизвестный',
         'responsible': None
     })
-    
-    logger.info(f"Права пользователя {user_id}: visibility={user_data.get('visibility')}, branch={user_data.get('branch')}")
-    
-    return user_data
 
 def normalize_branch_name(branch_name: str) -> str:
     """Нормализует название филиала к стандартному формату (множественное число)"""
@@ -604,14 +531,10 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user_id = str(update.effective_user.id)
-    
-    # Логируем для отладки
-    logger.info(f"Команда /start от пользователя {user_id} ({update.effective_user.first_name})")
-    logger.info(f"Размер users_cache: {len(users_cache)}")
-    
     permissions = get_user_permissions(user_id)
     
-    logger.info(f"Пользователь {user_id} ({update.effective_user.first_name}): visibility={permissions.get('visibility')}, branch={permissions.get('branch')}")
+    # Логируем для отладки
+    logger.info(f"Пользователь {user_id} ({update.effective_user.first_name}) запустил бота")
     
     if not permissions['visibility']:
         await update.message.reply_text(
@@ -714,8 +637,8 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if comment:
         notification_text += f"\n\n💬 Комментарий: {comment}"
     
-    # Формируем список получателей для записи в хранилище (без ID)
-    recipients_info = ", ".join([u['name'] for u in responsible_users]) if responsible_users else "Не найдены"
+    # Формируем список получателей для записи в хранилище
+    recipients_info = ", ".join([f"{u['name']} ({u['id']})" for u in responsible_users]) if responsible_users else "Не найдены"
     
     # Сохраняем уведомление в хранилище
     notification_data = {
@@ -899,7 +822,7 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         df = pd.DataFrame(notifications)
         
         # Проверяем наличие необходимых колонок
-        required_columns = ['branch', 'res', 'tp', 'vl', 'sender_name', 'recipient_name', 'datetime', 'coordinates']
+        required_columns = ['branch', 'res', 'sender_name', 'sender_id', 'recipient_name', 'recipient_id', 'datetime', 'coordinates']
         existing_columns = [col for col in required_columns if col in df.columns]
         
         if not existing_columns:
@@ -912,11 +835,11 @@ async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, ne
         # Переименовываем колонки
         column_mapping = {
             'branch': 'ФИЛИАЛ',
-            'res': 'РЭС',
-            'tp': 'ТП',
-            'vl': 'ВЛ',
+            'res': 'РЭС', 
             'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
+            'sender_id': 'ID ОТПРАВИТЕЛЯ',
             'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
+            'recipient_id': 'ID ПОЛУЧАТЕЛЯ',
             'datetime': 'ВРЕМЯ ДАТА',
             'coordinates': 'КООРДИНАТЫ'
         }
@@ -1019,6 +942,7 @@ async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT
             
             all_users_data.append({
                 'ФИО': user_info.get('name', 'Не указано'),
+                'Telegram ID': uid,
                 'Филиал': user_info.get('branch', '-'),
                 'РЭС': user_info.get('res', '-'),
                 'Ответственный': user_info.get('responsible', '-'),
@@ -2016,65 +1940,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для проверки статуса бота"""
-    user_id = str(update.effective_user.id)
-    permissions = get_user_permissions(user_id)
-    
-    status_text = f"""🤖 Статус бота ВОЛС Ассистент
-
-👤 Ваш ID: {user_id}
-📋 Ваши права: {permissions.get('visibility', 'Нет')}
-👥 Загружено пользователей: {len(users_cache)}
-💾 Резервная копия: {len(users_cache_backup)} пользователей
-🕐 Время сервера: {get_moscow_time().strftime('%d.%m.%Y %H:%M:%S')} МСК
-
-📊 Статистика:
-• Уведомлений РК: {len(notifications_storage.get('RK', []))}
-• Уведомлений ЮГ: {len(notifications_storage.get('UG', []))}
-• Активных пользователей: {len(user_activity)}
-
-🔧 Переменные окружения:
-• BOT_TOKEN: {'✅ Задан' if BOT_TOKEN else '❌ Не задан'}
-• ZONES_CSV_URL: {'✅ Задан' if ZONES_CSV_URL else '❌ Не задан'}
-• WEBHOOK_URL: {'✅ Задан' if WEBHOOK_URL else '❌ Не задан'}"""
-    
-    await update.message.reply_text(status_text)
-
-async def reload_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда для принудительной перезагрузки данных пользователей"""
-    user_id = str(update.effective_user.id)
-    
-    # Проверяем, что это администратор (можно добавить список админов)
-    admin_ids = ['248207151', '1409325335']  # Добавь свои ID админов
-    
-    if user_id not in admin_ids:
-        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды")
-        return
-    
-    loading_msg = await update.message.reply_text("🔄 Перезагружаю данные пользователей...")
-    
-    try:
-        # Очищаем кэш
-        global users_cache, users_cache_backup
-        old_count = len(users_cache)
-        users_cache = {}
-        
-        # Загружаем заново
-        load_users_data()
-        
-        new_count = len(users_cache)
-        
-        await loading_msg.edit_text(
-            f"✅ Данные успешно перезагружены!\n"
-            f"Было пользователей: {old_count}\n"
-            f"Загружено пользователей: {new_count}\n"
-            f"Резервная копия: {len(users_cache_backup)} пользователей"
-        )
-    except Exception as e:
-        await loading_msg.edit_text(f"❌ Ошибка перезагрузки: {str(e)}")
-        logger.error(f"Ошибка в команде reload: {e}", exc_info=True)
-
 async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Проверка доступности пользователя для отправки сообщений"""
     if len(context.args) == 0:
@@ -2149,22 +2014,11 @@ async def refresh_documents_cache():
                     logger.error(f"❌ Ошибка обновления кэша {doc_name}: {e}")
 
 if __name__ == '__main__':
-    # Проверяем обязательные переменные окружения
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN не задан в переменных окружения!")
-        exit(1)
-        
-    if not ZONES_CSV_URL:
-        logger.error("ZONES_CSV_URL не задан в переменных окружения!")
-        exit(1)
-    
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("status", status))
-    application.add_handler(CommandHandler("reload", reload_users))
     application.add_handler(CommandHandler("checkuser", check_user))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))

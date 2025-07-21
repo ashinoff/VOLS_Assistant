@@ -2,7 +2,7 @@
 ВОЛС Ассистент - Telegram бот для управления уведомлениями о бездоговорных ВОЛС
 Версия: 2.1.0 OPTIMIZED
 """
-
+# ЧАСТЬ 1
 BOT_VERSION = "2.1.0"
 
 import os
@@ -121,8 +121,7 @@ REFERENCE_DOCS = {
 USER_GUIDE_URL = os.environ.get('USER_GUIDE_URL', 'https://your-domain.com/vols-guide')
 
 BOT_USERS_FILE = os.environ.get('BOT_USERS_FILE', 'bot_users.json')
-
-# ==================== УЛУЧШЕННЫЕ ФУНКЦИИ ПОИСКА ====================
+# ЧАСТЬ 2 ==================== УЛУЧШЕННЫЕ ФУНКЦИИ ПОИСКА ====================
 
 def normalize_tp_name_advanced(name: str) -> str:
     """Улучшенная нормализация имени ТП для поиска"""
@@ -141,7 +140,8 @@ def normalize_tp_name_advanced(name: str) -> str:
     return name
 
 def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> List[Dict]:
-    """Улучшенный поиск ТП с поддержкой различных паттернов"""
+    """Улучшенный поиск ТП с поддержкой различных паттернов
+    ВАЖНО: Возвращает ВСЕ найденные записи, а не только уникальные ТП!"""
     if not tp_query or not data:
         return []
     
@@ -152,11 +152,10 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
     pattern_match = re.match(r'([А-ЯA-Z]+)-?(\d+)-?([А-ЯA-Z]+)?-?(\d+)?', normalized_query)
     
     results = []
-    seen_tp = set()  # Для исключения дубликатов
     
     for row in data:
         tp_name = row.get(column, '')
-        if not tp_name or tp_name in seen_tp:
+        if not tp_name:
             continue
             
         normalized_tp = normalize_tp_name_advanced(tp_name)
@@ -164,13 +163,11 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
         # 1. Точное совпадение
         if normalized_query == normalized_tp:
             results.append(row)
-            seen_tp.add(tp_name)
             continue
         
         # 2. Частичное совпадение
         if normalized_query in normalized_tp:
             results.append(row)
-            seen_tp.add(tp_name)
             continue
         
         # 3. Поиск по паттерну (для ВЛ-10-АД-2 и подобных)
@@ -195,7 +192,6 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
                     
                     if match:
                         results.append(row)
-                        seen_tp.add(tp_name)
                         break
         
         # 4. Поиск только по цифрам (старый метод для совместимости)
@@ -204,8 +200,8 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
         
         if query_digits and query_digits in tp_digits:
             results.append(row)
-            seen_tp.add(tp_name)
     
+    logger.info(f"[search_tp_in_data_advanced] Найдено записей: {len(results)}")
     return results
 
 # Оставляем старую функцию для совместимости
@@ -216,6 +212,53 @@ def normalize_tp_name(name: str) -> str:
 def search_tp_in_data(tp_query: str, data: List[Dict], column: str) -> List[Dict]:
     """Поиск ТП в данных (использует улучшенную версию)"""
     return search_tp_in_data_advanced(tp_query, data, column)
+
+# Новая функция для двойного поиска
+async def search_tp_in_both_catalogs(tp_query: str, branch: str, network: str, user_res: str = None) -> Dict:
+    """Поиск ТП одновременно в реестре договоров и структуре сети
+    ВАЖНО: Возвращает ВСЕ записи для найденных ТП"""
+    result = {
+        'registry': [],  # ВСЕ результаты из реестра договоров
+        'structure': [],  # ВСЕ результаты из структуры сети
+        'registry_tp_names': [],  # Уникальные названия ТП из реестра
+        'structure_tp_names': []  # Уникальные названия ТП из структуры
+    }
+    
+    # Поиск в реестре договоров (без SP)
+    registry_env_key = get_env_key_for_branch(branch, network, is_reference=False)
+    registry_url = os.environ.get(registry_env_key)
+    
+    if registry_url:
+        logger.info(f"Поиск в реестре договоров: {registry_env_key}")
+        registry_data = await load_csv_from_url_async(registry_url)
+        registry_results = search_tp_in_data(tp_query, registry_data, 'Наименование ТП')
+        
+        # Фильтруем по РЭС если нужно
+        if user_res and user_res != 'All':
+            registry_results = [r for r in registry_results if r.get('РЭС', '').strip() == user_res]
+        
+        result['registry'] = registry_results
+        result['registry_tp_names'] = list(set([r['Наименование ТП'] for r in registry_results]))
+        logger.info(f"[search_tp_in_both_catalogs] Реестр: найдено {len(registry_results)} записей, {len(result['registry_tp_names'])} уникальных ТП")
+    
+    # Поиск в структуре сети (с SP)
+    structure_env_key = get_env_key_for_branch(branch, network, is_reference=True)
+    structure_url = os.environ.get(structure_env_key)
+    
+    if structure_url:
+        logger.info(f"Поиск в структуре сети: {structure_env_key}")
+        structure_data = await load_csv_from_url_async(structure_url)
+        structure_results = search_tp_in_data(tp_query, structure_data, 'Наименование ТП')
+        
+        # Фильтруем по РЭС если нужно
+        if user_res and user_res != 'All':
+            structure_results = [r for r in structure_results if r.get('РЭС', '').strip() == user_res]
+        
+        result['structure'] = structure_results
+        result['structure_tp_names'] = list(set([r['Наименование ТП'] for r in structure_results]))
+        logger.info(f"[search_tp_in_both_catalogs] Структура: найдено {len(structure_results)} записей, {len(result['structure_tp_names'])} уникальных ТП")
+    
+    return result
 
 # ==================== АСИНХРОННАЯ ЗАГРУЗКА CSV ====================
 
@@ -265,7 +308,7 @@ async def load_csv_from_url_async(url: str) -> List[Dict]:
             return csv_cache[url]
         return []
 
-# Синхронная версия для обратной совместимости (использует кэш если есть)
+# Синхронная версия для обратной совместимости
 def load_csv_from_url(url: str) -> List[Dict]:
     """Загрузить CSV файл по URL (проверяет кэш)"""
     # Сначала проверяем кэш
@@ -335,8 +378,8 @@ async def preload_csv_files():
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"❌ Ошибка загрузки {csv_urls[i]}: {result}")
-
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+# чАСТЬ 2 КОНЕЦ        
+# чАСТЬ 3== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def get_moscow_time():
     """Получить текущее время в Москве"""
@@ -401,7 +444,8 @@ def update_user_activity(user_id: str):
     if user_id not in user_activity:
         user_activity[user_id] = {'last_activity': get_moscow_time(), 'count': 0}
     user_activity[user_id]['last_activity'] = get_moscow_time()
-    # ==================== РАБОТА С ДОКУМЕНТАМИ ====================
+
+# ==================== РАБОТА С ДОКУМЕНТАМИ ====================
 
 async def download_document(url: str) -> Optional[BytesIO]:
     """Скачать документ по URL (асинхронно)"""
@@ -455,7 +499,7 @@ async def get_cached_document(doc_name: str, doc_url: str) -> Optional[BytesIO]:
 # ==================== ЗАГРУЗКА ДАННЫХ ПОЛЬЗОВАТЕЛЕЙ ====================
 
 def load_users_data():
-    """Загрузить данные пользователей из CSV (оставляем синхронной как в оригинале)"""
+    """Загрузить данные пользователей из CSV"""
     global users_cache, users_cache_backup
     try:
         if not ZONES_CSV_URL:
@@ -463,7 +507,7 @@ def load_users_data():
             return
             
         logger.info(f"Начинаем загрузку данных из {ZONES_CSV_URL}")
-        data = load_csv_from_url(ZONES_CSV_URL)  # Использует кэш автоматически
+        data = load_csv_from_url(ZONES_CSV_URL)
         
         if not data:
             logger.error("Получен пустой список данных из CSV")
@@ -646,7 +690,8 @@ def get_env_key_for_branch(branch: str, network: str, is_reference: bool = False
     env_key = f"{branch_key}_URL{suffix}"
     logger.info(f"Итоговый ключ переменной окружения: {env_key}")
     return env_key
-
+    # ЧАСТЬ 3 КОНЕЦ
+# ЧАСТЬ 4 === ФУНКЦИИ КЛАВИАТУР ====================
 # ==================== ФУНКЦИИ КЛАВИАТУР ====================
 
 def get_main_keyboard(permissions: Dict) -> ReplyKeyboardMarkup:
@@ -787,20 +832,35 @@ def get_document_action_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_after_search_keyboard(tp_name: str = None) -> ReplyKeyboardMarkup:
+def get_after_search_keyboard(tp_name: str = None, search_query: str = None) -> ReplyKeyboardMarkup:
     """Клавиатура после результатов поиска"""
     keyboard = [
         ['🔍 Новый поиск']
     ]
     
-    if tp_name:
-        # Обрезаем название ТП если слишком длинное для кнопки
+    # Используем оригинальный поисковый запрос для кнопки уведомления
+    if search_query:
+        # Обрезаем запрос если слишком длинный для кнопки
+        display_query = search_query[:25] + '...' if len(search_query) > 25 else search_query
+        keyboard.append([f'📨 Отправить уведомление по "{display_query}"'])
+    elif tp_name:
+        # Fallback на название ТП если запрос не сохранен
         display_tp = tp_name[:25] + '...' if len(tp_name) > 25 else tp_name
         keyboard.append([f'📨 Отправить уведомление по {display_tp}'])
     else:
         keyboard.append(['📨 Отправить уведомление'])
     
     keyboard.append(['⬅️ Назад'])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_after_dual_search_keyboard() -> ReplyKeyboardMarkup:
+    """Клавиатура после просмотра результатов из двойного поиска"""
+    keyboard = [
+        ['⬅️ Вернуться к результатам поиска'],
+        ['🔍 Новый поиск'],
+        ['⬅️ Назад в меню филиала']
+    ]
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -812,8 +872,93 @@ def get_report_action_keyboard() -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ==================== EMAIL ФУНКЦИИ ====================
+# ВАЖНАЯ ФУНКЦИЯ! Клавиатура для двойного поиска - показывает ВСЕ найденные ТП
+def get_dual_search_keyboard(registry_tp_names: List[str], structure_tp_names: List[str]) -> ReplyKeyboardMarkup:
+    """Клавиатура с результатами поиска из двух справочников
+    ВАЖНО: Показывает ВСЕ найденные ТП из обоих справочников с раздельными колонками"""
+    keyboard = []
+    
+    # Определяем максимальное количество строк
+    max_rows = max(len(registry_tp_names), len(structure_tp_names), 1)  # Минимум 1 строка
+    
+    logger.info(f"[get_dual_search_keyboard] Реестр ТП: {len(registry_tp_names)}, Структура ТП: {len(structure_tp_names)}")
+    
+    # Всегда добавляем заголовок с двумя колонками
+    keyboard.append(['📋 РЕЕСТР ДОГОВОРОВ', '🗂️ СТРУКТУРА СЕТИ'])
+    
+    # Формируем строки с кнопками для ВСЕХ найденных ТП
+    for i in range(max_rows):
+        row = []
+        
+        # Кнопка из реестра договоров (слева)
+        if i < len(registry_tp_names):
+            tp_name = registry_tp_names[i]
+            # Обрезаем название если слишком длинное
+            display_name = tp_name[:20] + '...' if len(tp_name) > 20 else tp_name
+            row.append(f'📄 {display_name}')
+        else:
+            # Если нет данных - добавляем просто тире
+            row.append('➖')
+        
+        # Кнопка из структуры сети (справа)
+        if i < len(structure_tp_names):
+            tp_name = structure_tp_names[i]
+            # Обрезаем название если слишком длинное
+            display_name = tp_name[:20] + '...' if len(tp_name) > 20 else tp_name
+            row.append(f'📍 {display_name}')
+        else:
+            # Если нет данных - добавляем просто тире
+            row.append('➖')
+        
+        keyboard.append(row)
+    
+    # Если совсем нет результатов - добавляем строку с двумя тире
+    if not registry_tp_names and not structure_tp_names:
+        keyboard.append(['➖', '➖'])
+    
+    # Кнопки действий
+    keyboard.append(['🔍 Новый поиск'])
+    keyboard.append(['⬅️ Назад'])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+# ВАЖНАЯ ФУНКЦИЯ! Клавиатура для выбора ТП при уведомлении
+def get_tp_selection_keyboard(tp_list: List[str]) -> ReplyKeyboardMarkup:
+    """Клавиатура для выбора ТП
+    ВАЖНО: Показывает ВСЕ найденные ТП"""
+    keyboard = []
+    
+    logger.info(f"[get_tp_selection_keyboard] Создаю клавиатуру для {len(tp_list)} ТП")
+    
+    # Добавляем ВСЕ ТП как кнопки
+    for tp in tp_list:
+        keyboard.append([tp])
+    
+    keyboard.append(['⬅️ Назад'])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ВАЖНАЯ ФУНКЦИЯ! Клавиатура для выбора ВЛ
+def get_vl_selection_keyboard(vl_list: List[str], tp_name: str) -> ReplyKeyboardMarkup:
+    """Клавиатура для выбора ВЛ
+    ВАЖНО: Показывает ВСЕ найденные ВЛ для выбранной ТП"""
+    keyboard = []
+    
+    logger.info(f"[get_vl_selection_keyboard] Создаю клавиатуру для {len(vl_list)} ВЛ на ТП {tp_name}")
+    
+    # Сортируем ВЛ для удобства
+    vl_list_sorted = sorted(vl_list)
+    
+    # Добавляем ВСЕ ВЛ как кнопки
+    for vl in vl_list_sorted:
+        keyboard.append([vl])
+    
+    keyboard.append(['🔍 Новый поиск'])
+    keyboard.append(['⬅️ Назад'])
+    
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    #чАСТЬ 4 КОНЕЦ ====================
+ # ЧАСТЬ 5.1 ========= EMAIL ФУНКЦИИ ====================
 async def send_email(to_email: str, subject: str, body: str, attachment_data: BytesIO = None, attachment_name: str = None):
     """Отправка email через SMTP"""
     if not SMTP_EMAIL or not SMTP_PASSWORD:
@@ -875,7 +1020,8 @@ async def send_email(to_email: str, subject: str, body: str, attachment_data: By
     except Exception as e:
         logger.error(f"Ошибка отправки email на {to_email}: {e}")
         return False
-        # ==================== ОБРАБОТЧИКИ КОМАНД ====================
+
+# ==================== ОБРАБОТЧИКИ КОМАНД ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -1002,8 +1148,8 @@ async def check_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Пользователь заблокировал бота\n"
             f"• Неверный ID"
         )
-
-# ==================== ОТПРАВКА УВЕДОМЛЕНИЙ ====================
+        # ЧАСТЬ 5.1 КОНЕЦ =====================================================================================================
+# =ЧАСТЬ 5.2 ====== ОТПРАВКА УВЕДОМЛЕНИЙ ====================================================================================
 
 async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправить уведомление ответственным лицам"""
@@ -1234,53 +1380,72 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_states[user_id]['photo_id'] = None
     user_states[user_id]['comment'] = ''
     
-    # Если пришли из поиска - возвращаемся к выбору ВЛ
-    if 'last_search_tp' in user_states[user_id]:
-        user_states[user_id]['state'] = 'send_notification'
-        user_states[user_id]['action'] = 'select_vl'
-        
-        # Перезагружаем данные из справочника для получения списка ВЛ
-        env_key = get_env_key_for_branch(branch, network, is_reference=True)
-        csv_url = os.environ.get(env_key)
-        
-        if csv_url:
-            data = load_csv_from_url(csv_url)
-            results = search_tp_in_data(selected_tp, data, 'Наименование ТП')
-            
-            # Фильтруем по РЭС если нужно
-            user_permissions = get_user_permissions(user_id)
-            user_res = user_permissions.get('res')
-            if user_res and user_res != 'All':
-                results = [r for r in results if r.get('РЭС', '').strip() == user_res]
-            
-            if results:
-                vl_list = list(set([r['Наименование ВЛ'] for r in results]))
-                keyboard = []
-                for vl in vl_list:
-                    keyboard.append([vl])
-                keyboard.append(['🔍 Новый поиск'])
-                keyboard.append(['⬅️ Назад'])
-                
-                await update.message.reply_text(
-                    result_text + f"\n\n✨ Можете отправить еще уведомление по этой же ТП:\n📍 ТП: {selected_tp}\n\nВыберите ВЛ:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-                return
+    # ВСЕГДА возвращаемся к выбору ВЛ после отправки уведомления
+    user_states[user_id]['state'] = 'send_notification'
+    user_states[user_id]['action'] = 'select_vl'
     
-    # Иначе - стандартное поведение (возврат в меню филиала)
-    user_states[user_id]['state'] = f'branch_{branch}'
-    user_states[user_id]['branch'] = branch
-    user_states[user_id]['network'] = network
+    # Перезагружаем данные из справочника для получения списка ВЛ
+    env_key = get_env_key_for_branch(branch, network, is_reference=True)
+    csv_url = os.environ.get(env_key)
     
-    await update.message.reply_text(
-        result_text,
-        reply_markup=get_branch_menu_keyboard()
-    )
+    if csv_url:
+        data = load_csv_from_url(csv_url)
+        # ВАЖНО: используем ТОЧНОЕ название ТП для поиска
+        results = [r for r in data if r.get('Наименование ТП', '') == selected_tp]
+        
+        logger.info(f"[send_notification] Перезагрузка данных для ТП '{selected_tp}'")
+        logger.info(f"[send_notification] Найдено записей с точным совпадением: {len(results)}")
+        
+        # Фильтруем по РЭС если нужно
+        user_permissions = get_user_permissions(user_id)
+        user_res = user_permissions.get('res')
+        if user_res and user_res != 'All':
+            results = [r for r in results if r.get('РЭС', '').strip() == user_res]
+            logger.info(f"[send_notification] После фильтрации по РЭС '{user_res}': {len(results)} записей")
+        
+        if results:
+            # ВАЖНО: Получаем ВСЕ уникальные ВЛ
+            vl_list = list(set([r['Наименование ВЛ'] for r in results]))
+            vl_list.sort()
+            
+            logger.info(f"[send_notification] После отправки найдено {len(vl_list)} уникальных ВЛ")
+            logger.info(f"[send_notification] ВЛ: {vl_list}")
+            
+            # Используем новую функцию для создания клавиатуры
+            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+            
+            await update.message.reply_text(
+                result_text + f"\n\n✨ Можете отправить еще уведомление по этой же ТП:\n📍 ТП: {selected_tp}\n\nВыберите ВЛ:",
+                reply_markup=reply_markup
+            )
+            return
+        else:
+            # Если не удалось загрузить ВЛ - возвращаемся в меню филиала
+            logger.warning(f"[send_notification] Не найдено ВЛ для ТП '{selected_tp}'")
+            user_states[user_id]['state'] = f'branch_{branch}'
+            user_states[user_id]['branch'] = branch
+            user_states[user_id]['network'] = network
+            
+            await update.message.reply_text(
+                result_text + "\n\n⚠️ Не удалось загрузить список ВЛ для повторной отправки",
+                reply_markup=get_branch_menu_keyboard()
+            )
+    else:
+        # Если нет справочника - возвращаемся в меню филиала
+        user_states[user_id]['state'] = f'branch_{branch}'
+        user_states[user_id]['branch'] = branch
+        user_states[user_id]['network'] = network
+        
+        await update.message.reply_text(
+            result_text,
+            reply_markup=get_branch_menu_keyboard()
+        )
 
 # ==================== ПОКАЗ РЕЗУЛЬТАТОВ ПОИСКА ====================
 
-async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
-    """Показать результаты поиска по ТП (БЕЗ ОГРАНИЧЕНИЯ НА КОЛИЧЕСТВО)"""
+async def show_tp_results(update: Update, results: List[Dict], tp_name: str, search_query: str = None):
+    """Показать результаты поиска по ТП
+    ИСПРАВЛЕНО: Теперь показывает ВСЕ ВЛ и ВСЕ записи для каждой ВЛ!"""
     if not results:
         await update.message.reply_text("❌ Результаты не найдены")
         return
@@ -1288,596 +1453,113 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str):
     # Сохраняем найденную ТП для возможности отправки уведомления
     user_id = str(update.effective_user.id)
     user_states[user_id]['last_search_tp'] = tp_name
+    user_states[user_id]['last_search_query'] = search_query or tp_name
     user_states[user_id]['action'] = 'after_results'
+    
     logger.info(f"[show_tp_results] Сохранена ТП для отправки уведомления: {tp_name}")
-    logger.info(f"[show_tp_results] Текущий state: {user_states[user_id].get('state')}")
-    logger.info(f"[show_tp_results] Текущий action: {user_states[user_id].get('action')}")
+    logger.info(f"[show_tp_results] Сохранен поисковый запрос: {search_query}")
+    logger.info(f"[show_tp_results] Всего найдено записей: {len(results)}")
     
     res_name = results[0].get('РЭС', 'Неизвестный')
     
-    message = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
-    
+    # Группируем результаты по ВЛ
+    vl_groups = {}
     for result in results:
         vl = result.get('Наименование ВЛ', '-')
-        supports = result.get('Опоры', '-')
-        supports_count = result.get('Количество опор', '-')
-        provider = result.get('Наименование Провайдера', '-')
+        if vl not in vl_groups:
+            vl_groups[vl] = []
+        vl_groups[vl].append(result)
+    
+    logger.info(f"[show_tp_results] Найдено уникальных ВЛ: {len(vl_groups)}")
+    logger.info(f"[show_tp_results] ВЛ: {list(vl_groups.keys())}")
+    
+    # Формируем заголовок сообщения
+    message = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n"
+    message += f"🔌 Уникальных ВЛ: {len(vl_groups)}\n\n"
+    
+    # Формируем сообщение по группам ВЛ
+    for vl, vl_results in sorted(vl_groups.items()):
+        message += f"⚡ **ВЛ: {vl}**\n"
         
-        message += f"⚡ ВЛ: {vl}\n"
-        message += f"Опоры: {supports}, Количество опор: {supports_count}\n"
-        message += f"Контрагент: {provider}\n\n"
+        # ВАЖНО: Показываем ВСЕ записи для этой ВЛ
+        if len(vl_results) > 1:
+            # Если несколько записей - нумеруем их
+            for i, result in enumerate(vl_results, 1):
+                supports = result.get('Опоры', '-')
+                supports_count = result.get('Количество опор', '-')
+                provider = result.get('Наименование Провайдера', '-')
+                message += f"  {i}. Опоры: {supports}, Кол-во: {supports_count}\n"
+                message += f"     Контрагент: {provider}\n"
+        else:
+            # Если одна запись - показываем без нумерации
+            result = vl_results[0]
+            supports = result.get('Опоры', '-')
+            supports_count = result.get('Количество опор', '-')
+            provider = result.get('Наименование Провайдера', '-')
+            message += f"Опоры: {supports}, Количество опор: {supports_count}\n"
+            message += f"Контрагент: {provider}\n"
+        
+        message += "\n"
     
     # Разбиваем на части если сообщение слишком длинное
     if len(message) > 4000:
-        parts = []
-        current_part = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
+        # Первое сообщение с заголовком
+        header = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n"
+        header += f"🔌 Уникальных ВЛ: {len(vl_groups)}\n\n"
         
-        for result in results:
-            result_text = f"⚡ ВЛ: {result.get('Наименование ВЛ', '-')}\n"
-            result_text += f"Опоры: {result.get('Опоры', '-')}, Количество опор: {result.get('Количество опор', '-')}\n"
-            result_text += f"Контрагент: {result.get('Наименование Провайдера', '-')}\n\n"
+        parts = []
+        current_part = ""
+        
+        for vl, vl_results in sorted(vl_groups.items()):
+            vl_text = f"⚡ **ВЛ: {vl}**\n"
             
-            if len(current_part + result_text) > 4000:
-                parts.append(current_part)
-                current_part = result_text
+            if len(vl_results) > 1:
+                for i, result in enumerate(vl_results, 1):
+                    vl_text += f"  {i}. Опоры: {result.get('Опоры', '-')}, Кол-во: {result.get('Количество опор', '-')}\n"
+                    vl_text += f"     Контрагент: {result.get('Наименование Провайдера', '-')}\n"
             else:
-                current_part += result_text
+                result = vl_results[0]
+                vl_text += f"Опоры: {result.get('Опоры', '-')}, Количество опор: {result.get('Количество опор', '-')}\n"
+                vl_text += f"Контрагент: {result.get('Наименование Провайдера', '-')}\n"
+            
+            vl_text += "\n"
+            
+            # Проверяем, поместится ли в текущую часть
+            if len(current_part + vl_text) > 3500:
+                parts.append(current_part)
+                current_part = vl_text
+            else:
+                current_part += vl_text
         
         if current_part:
             parts.append(current_part)
         
-        for part in parts:
-            await update.message.reply_text(part)
+        # Отправляем первую часть с заголовком
+        await update.message.reply_text(header + parts[0], parse_mode='Markdown')
+        
+        # Отправляем остальные части
+        for part in parts[1:]:
+            await update.message.reply_text(part, parse_mode='Markdown')
     else:
-        await update.message.reply_text(message)
+        await update.message.reply_text(message, parse_mode='Markdown')
     
-    await update.message.reply_text(
-        "Выберите действие:",
-        reply_markup=get_after_search_keyboard(tp_name)
-    )
-
-# ==================== ГЕНЕРАЦИЯ ОТЧЕТОВ ====================
-
-async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
-    """Генерация отчета"""
-    try:
-        user_id = str(update.effective_user.id)
-        
-        if permissions['branch'] != 'All':
-            await update.message.reply_text("❌ У вас нет доступа к отчетам")
-            return
-        
-        notifications = notifications_storage[network]
-        
-        if not notifications:
-            await update.message.reply_text("📊 Нет данных для отчета")
-            return
-        
-        report_messages = [
-            "📊 Собираю данные...",
-            "📈 Формирую статистику...",
-            "📝 Создаю таблицы...",
-            "🎨 Оформляю отчет...",
-            "💾 Сохраняю файл..."
-        ]
-        
-        loading_msg = await update.message.reply_text(report_messages[0])
-        
-        for msg_text in report_messages[1:]:
-            await asyncio.sleep(0.5)
-            try:
-                await loading_msg.edit_text(msg_text)
-            except Exception:
-                pass
-        
-        df = pd.DataFrame(notifications)
-        
-        required_columns = ['branch', 'res', 'tp', 'vl', 'sender_name', 'recipient_name', 'datetime', 'coordinates']
-        existing_columns = [col for col in required_columns if col in df.columns]
-        
-        if not existing_columns:
-            await loading_msg.delete()
-            await update.message.reply_text("📊 Недостаточно данных для формирования отчета")
-            return
-            
-        df = df[existing_columns]
-        
-        column_mapping = {
-            'branch': 'ФИЛИАЛ',
-            'res': 'РЭС',
-            'tp': 'ТП',
-            'vl': 'ВЛ',
-            'sender_name': 'ФИО ОТПРАВИТЕЛЯ',
-            'recipient_name': 'ФИО ПОЛУЧАТЕЛЯ',
-            'datetime': 'ВРЕМЯ ДАТА',
-            'coordinates': 'КООРДИНАТЫ'
-        }
-        df.rename(columns=column_mapping, inplace=True)
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Уведомления', index=False)
-            
-            workbook = writer.book
-            worksheet = writer.sheets['Уведомления']
-            
-            header_format = workbook.add_format({
-                'bg_color': '#FFE6E6',
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'border': 1
-            })
-            
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            for i, col in enumerate(df.columns):
-                column_len = df[col].astype(str).map(len).max()
-                column_len = max(column_len, len(col)) + 2
-                worksheet.set_column(i, i, column_len)
-        
-        output.seek(0)
-        
-        await loading_msg.delete()
-        
-        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
-        moscow_time = get_moscow_time()
-        filename = f"Уведомления_{network_name}_{moscow_time.strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        user_states[user_id]['last_report'] = {
-            'data': output.getvalue(),
-            'filename': filename,
-            'caption': f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"
-        }
-        user_states[user_id]['state'] = 'report_actions'
-        
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=f"📊 Отчет по уведомлениям {network_name}\n🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК",
-            reply_markup=get_report_action_keyboard()
-        )
-                
-    except Exception as e:
-        logger.error(f"Ошибка генерации отчета: {e}")
-        if 'loading_msg' in locals():
-            await loading_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
-
-async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
-    """Генерация отчета по активности пользователей с полным реестром"""
-    try:
-        user_id = str(update.effective_user.id)
-        
-        if permissions['branch'] != 'All':
-            await update.message.reply_text("❌ У вас нет доступа к отчетам")
-            return
-        
-        loading_msg = await update.message.reply_text("📈 Формирую полный отчет активности...")
-        
-        all_users_data = []
-        
-        for uid, user_info in users_cache.items():
-            if user_info.get('visibility') not in ['All', network]:
-                continue
-            
-            activity = user_activity.get(uid, None)
-            
-            if activity:
-                is_active = True
-                notification_count = activity['count']
-                last_activity = activity['last_activity'].strftime('%d.%m.%Y %H:%M')
-            else:
-                is_active = False
-                notification_count = 0
-                last_activity = 'Нет активности'
-            
-            all_users_data.append({
-                'ФИО': user_info.get('name', 'Не указано'),
-                'Филиал': user_info.get('branch', '-'),
-                'РЭС': user_info.get('res', '-'),
-                'Ответственный': user_info.get('responsible', '-'),
-                'Email': user_info.get('email', '-'),
-                'Статус': 'Активный' if is_active else 'Неактивный',
-                'Количество уведомлений': notification_count,
-                'Последняя активность': last_activity
-            })
-        
-        if not all_users_data:
-            await loading_msg.delete()
-            await update.message.reply_text("📈 Нет данных для отчета")
-            return
-        
-        df = pd.DataFrame(all_users_data)
-        df = df.sort_values(['Статус', 'Количество уведомлений'], ascending=[True, False])
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Активность пользователей', index=False)
-            
-            workbook = writer.book
-            worksheet = writer.sheets['Активность пользователей']
-            
-            header_format = workbook.add_format({
-                'bg_color': '#4B4B4B',
-                'font_color': 'white',
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'border': 1
-            })
-            
-            active_format = workbook.add_format({
-                'bg_color': '#E8F5E9',
-                'border': 1
-            })
-            
-            inactive_format = workbook.add_format({
-                'bg_color': '#FFEBEE',
-                'border': 1
-            })
-            
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            for row_num, (index, row) in enumerate(df.iterrows(), start=1):
-                cell_format = active_format if row['Статус'] == 'Активный' else inactive_format
-                for col_num, value in enumerate(row):
-                    worksheet.write(row_num, col_num, value, cell_format)
-            
-            for i, col in enumerate(df.columns):
-                column_len = df[col].astype(str).map(len).max()
-                column_len = max(column_len, len(col)) + 2
-                worksheet.set_column(i, i, min(column_len, 40))
-            
-            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
-        
-        output.seek(0)
-        
-        await loading_msg.delete()
-        
-        active_count = len(df[df['Статус'] == 'Активный'])
-        inactive_count = len(df[df['Статус'] == 'Неактивный'])
-        
-        network_name = "РОССЕТИ КУБАНЬ" if network == 'RK' else "РОССЕТИ ЮГ"
-        moscow_time = get_moscow_time()
-        filename = f"Полный_реестр_активности_{network_name}_{moscow_time.strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        caption = f"""📈 Полный отчет активности {network_name}
-
-👥 Всего пользователей: {len(df)}
-✅ Активных: {active_count} (зеленый)
-❌ Неактивных: {inactive_count} (красный)
-
-📊 Отчет содержит полный реестр пользователей с цветовой индикацией активности
-🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК"""
-        
-        user_states[user_id]['last_report'] = {
-            'data': output.getvalue(),
-            'filename': filename,
-            'caption': caption
-        }
-        user_states[user_id]['state'] = 'report_actions'
-        
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=caption,
-            reply_markup=get_report_action_keyboard()
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка генерации отчета активности: {e}")
-        if 'loading_msg' in locals():
-            await loading_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
-
-async def generate_ping_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Генерация отчета статуса пользователей - кто заходил в бота"""
-    try:
-        user_id = str(update.effective_user.id)
-        permissions = get_user_permissions(user_id)
-        
-        if permissions.get('visibility') != 'All':
-            await update.message.reply_text("❌ У вас нет доступа к этой функции")
-            return
-        
-        if not users_cache:
-            await update.message.reply_text(
-                "❌ База пользователей не загружена.\n\n"
-                "Попробуйте команду /reload для перезагрузки данных."
-            )
-            return
-        
-        loading_msg = await update.message.reply_text("📊 Формирую отчет статуса пользователей...")
-        
-        ping_data = []
-        
-        for uid, user_info in users_cache.items():
-            bot_info = bot_users.get(uid)
-            
-            if bot_info:
-                status = '✅ Активирован'
-                first_start = bot_info['first_start'].strftime('%d.%m.%Y %H:%M')
-                last_start = bot_info['last_start'].strftime('%d.%m.%Y %H:%M')
-            else:
-                status = '❌ Не активирован'
-                first_start = '-'
-                last_start = '-'
-            
-            ping_data.append({
-                'ФИО': user_info.get('name', 'Не указано'),
-                'Telegram ID': uid,
-                'Филиал': user_info.get('branch', '-'),
-                'РЭС': user_info.get('res', '-'),
-                'Видимость': user_info.get('visibility', '-'),
-                'Статус': status,
-                'Первый вход': first_start,
-                'Последний вход': last_start
-            })
-        
-        if not ping_data:
-            await loading_msg.delete()
-            await update.message.reply_text("📊 Нет данных для отчета.\n\nВозможно база пользователей не загружена.")
-            return
-        
-        df = pd.DataFrame(ping_data)
-        df = df.sort_values(['Статус', 'ФИО'])
-        
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Статус пользователей', index=False)
-            
-            workbook = writer.book
-            worksheet = writer.sheets['Статус пользователей']
-            
-            header_format = workbook.add_format({
-                'bg_color': '#4B4B4B',
-                'font_color': 'white',
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'vcenter',
-                'align': 'center',
-                'border': 1
-            })
-            
-            active_format = workbook.add_format({
-                'bg_color': '#E8F5E9',
-                'border': 1
-            })
-            
-            inactive_format = workbook.add_format({
-                'bg_color': '#FFEBEE',
-                'border': 1
-            })
-            
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-            
-            for row_num, (index, row) in enumerate(df.iterrows(), start=1):
-                cell_format = active_format if '✅' in row['Статус'] else inactive_format
-                for col_num, value in enumerate(row):
-                    worksheet.write(row_num, col_num, value, cell_format)
-            
-            for i, col in enumerate(df.columns):
-                column_len = df[col].astype(str).map(len).max()
-                column_len = max(column_len, len(col)) + 2
-                worksheet.set_column(i, i, min(column_len, 40))
-            
-            worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
-        
-        output.seek(0)
-        
-        await loading_msg.delete()
-        
-        active_count = len(df[df['Статус'] == '✅ Активирован'])
-        inactive_count = len(df[df['Статус'] == '❌ Не активирован'])
-        total_count = len(df)
-        
-        moscow_time = get_moscow_time()
-        filename = f"Статус_пользователей_{moscow_time.strftime('%Y%m%d_%H%M%S')}.xlsx"
-        
-        caption = f"""📊 Отчет статуса пользователей
-
-👥 Всего в базе: {total_count}
-✅ Активировали бота: {active_count} ({active_count/total_count*100:.1f}%)
-❌ Не активировали: {inactive_count} ({inactive_count/total_count*100:.1f}%)
-
-📋 Зеленым отмечены те, кто хотя бы раз запускал бота
-🕐 Сформировано: {moscow_time.strftime('%d.%m.%Y %H:%M')} МСК
-
-⚠️ Внимание: данные о запусках сохраняются только в текущей сессии бота.
-После обновления/перезапуска бота статистика обнуляется!"""
-        
-        await update.message.reply_document(
-            document=InputFile(output, filename=filename),
-            caption=caption
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка генерации PING отчета: {e}", exc_info=True)
-        if 'loading_msg' in locals():
-            await loading_msg.delete()
-        await update.message.reply_text(f"❌ Ошибка генерации отчета: {str(e)}")
-
-# ==================== АДМИНИСТРИРОВАНИЕ ====================
-
-async def notify_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Уведомить всех пользователей о необходимости перезапуска бота"""
-    user_id = str(update.effective_user.id)
-    permissions = get_user_permissions(user_id)
-    
-    if permissions.get('visibility') != 'All':
-        await update.message.reply_text("❌ У вас нет доступа к этой функции")
-        return
-    
-    if not users_cache:
+    # Используем сохраненный поисковый запрос для кнопки
+    # Проверяем, откуда пришли - из двойного поиска или обычного
+    if 'dual_search_results' in user_states[user_id]:
+        # Пришли из двойного поиска - показываем специальную клавиатуру
         await update.message.reply_text(
-            "❌ База пользователей не загружена.\n\n"
-            "Попробуйте команду /reload для перезагрузки данных."
+            "Выберите действие:",
+            reply_markup=get_after_dual_search_keyboard()
         )
-        return
-    
-    loading_msg = await update.message.reply_text("🔄 Начинаю отправку уведомлений о перезапуске...")
-    
-    restart_message = """🔄 *Обновление бота ВОЛС Ассистент*
-
-Бот был обновлен и перезапущен.
-
-Для продолжения работы, пожалуйста, нажмите команду:
-👉 /start
-
-Это необходимо для корректной работы всех функций бота после обновления.
-
-_Приносим извинения за неудобства._"""
-    
-    success_count = 0
-    failed_count = 0
-    failed_users = []
-    
-    total_users = len(users_cache)
-    
-    for i, (uid, user_info) in enumerate(users_cache.items()):
-        try:
-            if i % 20 == 0:
-                try:
-                    await loading_msg.edit_text(
-                        f"🔄 Отправка уведомлений о перезапуске...\n"
-                        f"Прогресс: {i}/{total_users}"
-                    )
-                except:
-                    pass
-            
-            await context.bot.send_message(
-                chat_id=uid,
-                text=restart_message,
-                parse_mode='Markdown'
-            )
-            success_count += 1
-            
-            await asyncio.sleep(0.05)
-            
-        except Exception as e:
-            failed_count += 1
-            failed_users.append(f"{user_info.get('name', 'ID: ' + uid)}")
-            logger.debug(f"Не удалось отправить пользователю {uid}: {e}")
-    
-    await loading_msg.delete()
-    
-    result_text = f"""✅ Уведомления о перезапуске отправлены!
-
-📊 Статистика:
-• Всего в базе: {total_users}
-• ✅ Успешно отправлено: {success_count}
-• ❌ Не удалось отправить: {failed_count}
-
-💡 Пользователи, которым не удалось отправить, вероятно:
-• Не запускали бота ни разу
-• Заблокировали бота  
-• Удалили аккаунт Telegram
-
-🔄 Рекомендуется использовать эту функцию после каждого обновления бота!"""
-    
-    if failed_users and len(failed_users) <= 10:
-        result_text += f"\n\n❌ Не удалось отправить:\n" + "\n".join(failed_users[:10])
-        if len(failed_users) > 10:
-            result_text += f"\n... и еще {len(failed_users) - 10} пользователей"
-    
-    await update.message.reply_text(result_text)
-
-async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка массовой рассылки"""
-    user_id = str(update.effective_user.id)
-    permissions = get_user_permissions(user_id)
-    
-    if permissions.get('visibility') != 'All':
-        await update.message.reply_text("❌ У вас нет доступа к этой функции")
-        return
-    
-    state_data = user_states.get(user_id, {})
-    broadcast_type = state_data.get('broadcast_type', 'bot_users')
-    
-    if broadcast_type == 'all_users' and not users_cache:
-        await update.message.reply_text(
-            "❌ База пользователей не загружена.\n\n"
-            "Попробуйте команду /reload для перезагрузки данных."
-        )
-        return
-    
-    broadcast_text = update.message.text
-    
-    if broadcast_text == '❌ Отмена':
-        user_states[user_id] = {'state': 'main'}
-        await update.message.reply_text(
-            "Рассылка отменена",
-            reply_markup=get_main_keyboard(get_user_permissions(user_id))
-        )
-        return
-    
-    loading_msg = await update.message.reply_text("📤 Начинаю рассылку...")
-    
-    success_count = 0
-    failed_count = 0
-    failed_users = []
-    
-    if broadcast_type == 'all_users':
-        recipients = users_cache
-        recipient_type = "всем пользователям из базы"
     else:
-        recipients = {uid: users_cache.get(uid, {'name': f'ID: {uid}'}) for uid in bot_users}
-        recipient_type = "пользователям, запускавшим бота"
-    
-    total_users = len(recipients)
-    
-    for i, (uid, user_info) in enumerate(recipients.items()):
-        try:
-            if i % 20 == 0:
-                try:
-                    await loading_msg.edit_text(
-                        f"📤 Отправка сообщений {recipient_type}...\n"
-                        f"Прогресс: {i}/{total_users}"
-                    )
-                except:
-                    pass
-            
-            await context.bot.send_message(
-                chat_id=uid,
-                text=broadcast_text,
-                parse_mode='Markdown'
-            )
-            success_count += 1
-            
-            await asyncio.sleep(0.05)
-            
-        except Exception as e:
-            failed_count += 1
-            user_name = user_info.get('name', f'ID: {uid}')
-            failed_users.append(user_name)
-            logger.debug(f"Ошибка отправки пользователю {uid}: {e}")
-    
-    await loading_msg.delete()
-    
-    result_text = f"""✅ Рассылка завершена!
+        # Обычный поиск - показываем стандартную клавиатуру
+        await update.message.reply_text(
+            "Выберите действие:",
+            reply_markup=get_after_search_keyboard(tp_name, search_query)
+        )
+        #ЧАСТЬ 5.2 КОНЕЦ= ОБРАБОТЧИК СООБЩЕНИЙ ================================================================================================
 
-📊 Статистика:
-• Тип рассылки: {recipient_type}
-• Всего получателей: {total_users}
-• ✅ Успешно: {success_count}
-• ❌ Не удалось: {failed_count}"""
-    
-    if failed_users and len(failed_users) <= 10:
-        result_text += f"\n\n❌ Не удалось отправить:\n" + "\n".join(failed_users[:10])
-        if len(failed_users) > 10:
-            result_text += f"\n... и еще {len(failed_users) - 10} пользователей"
-    
-    user_states[user_id] = {'state': 'main'}
-    
-    await update.message.reply_text(
-        result_text,
-        reply_markup=get_main_keyboard(get_user_permissions(user_id))
-    )
-    # ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
+# ===ЧАСТЬ 5.3=== ОБРАБОТЧИК СООБЩЕНИЙ ========================================================================================================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик текстовых сообщений"""
@@ -1897,6 +1579,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отладка для админа
     if user_id == '248207151':
         logger.info(f"[DEBUG] User {user_id}: state='{state}', action='{action}', text='{text}'")
+    
+    # Обработка пустых кнопок (➖) - игнорируем их
+    if text == '➖':
+        logger.info(f"Пользователь {user_id} нажал на пустую кнопку ➖, игнорируем")
+        return
     
     # Выбор типа рассылки
     if state == 'broadcast_choice':
@@ -1940,11 +1627,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_broadcast(update, context)
         return
     
-    # Обработка кнопки Назад
+    # Обработка кнопки Назад - ИСПРАВЛЕНО: убрал return в конце!
     if text == '⬅️ Назад':
         if state in ['rosseti_kuban', 'rosseti_yug', 'reports', 'phones', 'settings', 'broadcast_message', 'broadcast_choice', 'admin']:
             user_states[user_id] = {'state': 'main'}
             await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
+            return  # return только здесь
+            
         elif state == 'reference':
             previous_state = user_states[user_id].get('previous_state')
             if previous_state and previous_state.startswith('branch_'):
@@ -1954,6 +1643,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 user_states[user_id] = {'state': 'main'}
                 await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
+            return  # return только здесь
+            
         elif state == 'document_actions':
             previous_state = user_states[user_id].get('previous_state')
             branch = user_states[user_id].get('branch')
@@ -1964,24 +1655,350 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 'branch': branch,
                 'network': network
             }
-            await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
-        elif state == 'report_actions':
-            user_states[user_id]['state'] = 'reports'
-            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
-        elif state.startswith('branch_'):
-            if permissions['branch'] != 'All':
-                user_states[user_id] = {'state': 'main'}
-                await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
-            else:
+            await update.message.reply_text(
+                "Выберите документ",
+                reply_markup=get_reference_keyboard()
+            )
+            return  # return только здесь
+            
+        # ВАЖНО: НЕ ставим return здесь! Продолжаем обработку других состояний с кнопкой "Назад"
+    
+    # Поиск ТП с двойным поиском
+    if state == 'search_tp':
+        if text == '🔍 Новый поиск':
+            user_states[user_id]['action'] = 'search'
+            keyboard = [['⬅️ Назад']]
+            await update.message.reply_text(
+                "🔍 Введите наименование ТП для поиска:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        elif text.startswith('📨 Отправить уведомление по'):
+            logger.info(f"Обработка кнопки отправки уведомления: '{text}'")
+            # Переход к отправке уведомления с уже найденной ТП
+            if 'last_search_query' in user_states[user_id]:
+                search_query = user_states[user_id]['last_search_query']
+                branch = user_states[user_id].get('branch')
                 network = user_states[user_id].get('network')
-                if network == 'RK':
-                    user_states[user_id] = {'state': 'rosseti_kuban', 'network': 'RK'}
-                    branches = ROSSETI_KUBAN_BRANCHES
+                
+                logger.info(f"Используем поисковый запрос для уведомления: {search_query}")
+                logger.info(f"Branch: {branch}, Network: {network}")
+                
+                # Проверяем права пользователя
+                user_permissions = get_user_permissions(user_id)
+                user_branch = user_permissions.get('branch')
+                
+                if user_branch and user_branch != 'All':
+                    branch = user_branch
+                    logger.info(f"Используем филиал из прав пользователя: {branch}")
+                
+                # Ищем в структуре сети (справочник SP) для уведомлений
+                env_key = get_env_key_for_branch(branch, network, is_reference=True)
+                csv_url = os.environ.get(env_key)
+                
+                if not csv_url:
+                    await update.message.reply_text(f"❌ Справочник для филиала {branch} не найден")
+                    return
+                
+                loading_msg = await update.message.reply_text("🔍 Ищу в справочнике структуры сети...")
+                
+                data = load_csv_from_url(csv_url)
+                results = search_tp_in_data(search_query, data, 'Наименование ТП')
+                
+                # Фильтруем по РЭС если у пользователя ограничения
+                user_res = user_permissions.get('res')
+                
+                if user_res and user_res != 'All':
+                    results = [r for r in results if r.get('РЭС', '').strip() == user_res]
+                
+                await loading_msg.delete()
+                
+                if not results:
+                    await update.message.reply_text("❌ ТП не найдена в справочнике структуры сети")
+                    return
+                
+                # ВАЖНО: Получаем ВСЕ уникальные ТП
+                tp_list = list(set([r['Наименование ТП'] for r in results]))
+                
+                logger.info(f"[handle_message] Найдено {len(tp_list)} уникальных ТП для уведомления")
+                
+                if len(tp_list) == 1:
+                    # Если найдена только одна ТП - сразу переходим к выбору ВЛ
+                    selected_tp = tp_list[0]
+                    user_states[user_id]['state'] = 'send_notification'
+                    user_states[user_id]['action'] = 'select_vl'
+                    user_states[user_id]['selected_tp'] = selected_tp
+                    user_states[user_id]['tp_data'] = results[0]
+                    user_states[user_id]['branch'] = branch
+                    user_states[user_id]['network'] = network
+                    
+                    # ВАЖНО: Получаем ВСЕ уникальные ВЛ
+                    vl_list = list(set([r['Наименование ВЛ'] for r in results]))
+                    vl_list.sort()
+                    
+                    logger.info(f"[handle_message] Найдено {len(vl_list)} уникальных ВЛ для ТП {selected_tp}")
+                    
+                    # Используем функцию для создания клавиатуры
+                    reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+                    
+                    await update.message.reply_text(
+                        f"📨 Отправка уведомления по ТП: {selected_tp}\n"
+                        f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
+                        f"Выберите ВЛ:",
+                        reply_markup=reply_markup
+                    )
                 else:
-                    user_states[user_id] = {'state': 'rosseti_yug', 'network': 'UG'}
-                    branches = ROSSETI_YUG_BRANCHES
-                await update.message.reply_text("Выберите филиал", reply_markup=get_branch_keyboard(branches))
-        elif state in ['search_tp', 'send_notification']:
+                    # Если найдено несколько ТП - показываем список для выбора
+                    user_states[user_id]['notification_results'] = results
+                    user_states[user_id]['action'] = 'select_notification_tp'
+                    user_states[user_id]['state'] = 'send_notification'
+                    
+                    # Используем функцию для создания клавиатуры
+                    reply_markup = get_tp_selection_keyboard(tp_list)
+                    
+                    await update.message.reply_text(
+                        f"✅ Найдено {len(tp_list)} ТП в структуре сети. Выберите нужную:",
+                        reply_markup=reply_markup
+                    )
+            else:
+                await update.message.reply_text("❌ Сначала выполните поиск ТП")
+                
+        # Обработка кнопки "⬅️ Вернуться к результатам поиска"
+        elif text == '⬅️ Вернуться к результатам поиска':
+            dual_results = user_states[user_id].get('dual_search_results', {})
+            if dual_results:
+                registry_tp_names = dual_results['registry_tp_names']
+                structure_tp_names = dual_results['structure_tp_names']
+                search_query = user_states[user_id].get('last_search_query', '')
+                
+                message = f"🔍 Результаты поиска по запросу: **{search_query}**\n\n"
+                
+                if registry_tp_names:
+                    message += f"📋 **Реестр договоров** (найдено {len(dual_results['registry'])} записей)\n"
+                    message += f"   ТП: {len(registry_tp_names)} шт.\n\n"
+                
+                if structure_tp_names:
+                    message += f"🗂️ **Структура сети** (найдено {len(dual_results['structure'])} записей)\n"
+                    message += f"   ТП: {len(structure_tp_names)} шт.\n\n"
+                
+                message += "📌 Выберите ТП:\n"
+                message += "• Слева (📄) - просмотр договоров\n"
+                message += "• Справа (📍) - отправка уведомления"
+                
+                await update.message.reply_text(
+                    message,
+                    reply_markup=get_dual_search_keyboard(registry_tp_names, structure_tp_names),
+                    parse_mode='Markdown'
+                )
+                
+        # Обработка кнопки "⬅️ Назад в меню филиала"
+        elif text == '⬅️ Назад в меню филиала':
+            branch = user_states[user_id].get('branch')
+            user_states[user_id]['state'] = f'branch_{branch}'
+            await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
+                
+        # Обработка нажатий на кнопки из двойного поиска
+        elif text.startswith('📄 ') or text.startswith('📍 '):
+            # Извлекаем название ТП из кнопки
+            tp_display_name = text[2:].strip()
+            
+            # Получаем сохраненные результаты поиска
+            dual_results = user_states[user_id].get('dual_search_results', {})
+            
+            if text.startswith('📄 '):
+                # Нажата кнопка из реестра договоров
+                registry_results = dual_results.get('registry', [])
+                registry_tp_names = dual_results.get('registry_tp_names', [])
+                
+                # Находим полное название ТП
+                full_tp_name = None
+                for tp_name in registry_tp_names:
+                    if tp_name.startswith(tp_display_name) or tp_display_name in tp_name:
+                        full_tp_name = tp_name
+                        break
+                
+                if full_tp_name:
+                    # Фильтруем результаты по найденной ТП
+                    tp_results = [r for r in registry_results if r['Наименование ТП'] == full_tp_name]
+                    if tp_results:
+                        search_query = user_states[user_id].get('last_search_query')
+                        await show_tp_results(update, tp_results, full_tp_name, search_query)
+                        user_states[user_id]['action'] = 'after_results'
+                    else:
+                        await update.message.reply_text("❌ Результаты не найдены")
+                        
+            elif text.startswith('📍 '):
+                # Нажата кнопка из структуры сети - переходим к выбору ВЛ для уведомления
+                structure_results = dual_results.get('structure', [])
+                structure_tp_names = dual_results.get('structure_tp_names', [])
+                
+                # Находим полное название ТП
+                full_tp_name = None
+                for tp_name in structure_tp_names:
+                    if tp_name.startswith(tp_display_name) or tp_display_name in tp_name:
+                        full_tp_name = tp_name
+                        break
+                
+                if full_tp_name:
+                    # Фильтруем результаты по найденной ТП
+                    tp_results = [r for r in structure_results if r['Наименование ТП'] == full_tp_name]
+                    
+                    logger.info(f"[handle_message] Выбрана ТП из структуры: {full_tp_name}")
+                    logger.info(f"[handle_message] Найдено записей для этой ТП: {len(tp_results)}")
+                    
+                    if tp_results:
+                        # Переходим к отправке уведомления
+                        user_states[user_id]['state'] = 'send_notification'
+                        user_states[user_id]['action'] = 'select_vl'
+                        user_states[user_id]['selected_tp'] = full_tp_name
+                        user_states[user_id]['tp_data'] = tp_results[0]
+                        
+                        # ВАЖНО: Получаем ВСЕ уникальные ВЛ
+                        vl_list = list(set([r['Наименование ВЛ'] for r in tp_results]))
+                        vl_list.sort()
+                        
+                        logger.info(f"[handle_message] Уникальных ВЛ найдено: {len(vl_list)}")
+                        logger.info(f"[handle_message] ВЛ: {vl_list}")
+                        
+                        # Используем функцию для создания клавиатуры
+                        reply_markup = get_vl_selection_keyboard(vl_list, full_tp_name)
+                        
+                        await update.message.reply_text(
+                            f"📨 Отправка уведомления по ТП: {full_tp_name}\n"
+                            f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
+                            f"Выберите ВЛ:",
+                            reply_markup=reply_markup
+                        )
+                    else:
+                        await update.message.reply_text("❌ Результаты не найдены")
+        
+        elif user_states[user_id].get('action') == 'search':
+            # Новый двойной поиск
+            branch = user_states[user_id].get('branch')
+            network = user_states[user_id].get('network')
+            
+            # Проверяем права пользователя
+            user_permissions = get_user_permissions(user_id)
+            user_branch = user_permissions.get('branch')
+            user_res = user_permissions.get('res')
+            
+            # Если у пользователя указан конкретный филиал в правах - используем его
+            if user_branch and user_branch != 'All':
+                branch = user_branch
+                logger.info(f"Используем филиал из прав пользователя: {branch}")
+            else:
+                # Только если выбрали из меню - нормализуем
+                branch = normalize_branch_name(branch)
+            
+            logger.info(f"Двойной поиск ТП для филиала: {branch}, сеть: {network}")
+            if user_res and user_res != 'All':
+                logger.info(f"Пользователь имеет доступ только к РЭС: {user_res}")
+            
+            search_messages = [
+                "🔍 Ищу информацию...",
+                "📋 Проверяю реестр договоров...",
+                "🗂️ Проверяю структуру сети...",
+                "📊 Анализирую данные...",
+                "🔄 Обрабатываю результаты..."
+            ]
+            
+            loading_msg = await update.message.reply_text(search_messages[0])
+            
+            for i, msg_text in enumerate(search_messages[1:], 1):
+                await asyncio.sleep(0.5)
+                try:
+                    await loading_msg.edit_text(msg_text)
+                except Exception:
+                    pass
+            
+            # Выполняем двойной поиск
+            dual_results = await search_tp_in_both_catalogs(text, branch, network, user_res)
+            
+            await loading_msg.delete()
+            
+            # Сохраняем результаты и оригинальный запрос
+            user_states[user_id]['dual_search_results'] = dual_results
+            user_states[user_id]['last_search_query'] = text
+            user_states[user_id]['action'] = 'dual_search'
+            
+            registry_tp_names = dual_results['registry_tp_names']
+            structure_tp_names = dual_results['structure_tp_names']
+            
+            if not registry_tp_names and not structure_tp_names:
+                await update.message.reply_text(
+                    "❌ ТП не найдено ни в одном справочнике.\n\n"
+                    "Попробуйте другой запрос.",
+                    reply_markup=get_after_search_keyboard(None, text)
+                )
+            elif len(registry_tp_names) == 1 and not structure_tp_names:
+                # Если найдена только одна ТП в реестре договоров
+                await show_tp_results(update, dual_results['registry'], registry_tp_names[0], text)
+            elif not registry_tp_names and len(structure_tp_names) == 1:
+                # Если найдена только одна ТП в структуре сети - сразу переходим к уведомлению
+                selected_tp = structure_tp_names[0]
+                tp_results = [r for r in dual_results['structure'] if r['Наименование ТП'] == selected_tp]
+                
+                logger.info(f"[handle_message] Единственная ТП в структуре: {selected_tp}")
+                logger.info(f"[handle_message] Записей для этой ТП: {len(tp_results)}")
+                
+                user_states[user_id]['state'] = 'send_notification'
+                user_states[user_id]['action'] = 'select_vl'
+                user_states[user_id]['selected_tp'] = selected_tp
+                user_states[user_id]['tp_data'] = tp_results[0]
+                
+                # ВАЖНО: Получаем ВСЕ уникальные ВЛ
+                vl_list = list(set([r['Наименование ВЛ'] for r in tp_results]))
+                vl_list.sort()
+                
+                logger.info(f"[handle_message] Уникальных ВЛ: {len(vl_list)}")
+                logger.info(f"[handle_message] ВЛ: {vl_list}")
+                
+                # Используем функцию для создания клавиатуры
+                reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+                
+                await update.message.reply_text(
+                    f"✅ ТП найдена только в структуре сети\n\n"
+                    f"📨 Отправка уведомления по ТП: {selected_tp}\n"
+                    f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
+                    f"Выберите ВЛ:",
+                    reply_markup=reply_markup
+                )
+            else:
+                # Показываем двойную клавиатуру
+                registry_count = len(dual_results['registry'])
+                structure_count = len(dual_results['structure'])
+                
+                message = f"🔍 Результаты поиска по запросу: **{text}**\n\n"
+                
+                if registry_tp_names:
+                    message += f"📋 **Реестр договоров** (найдено {registry_count} записей)\n"
+                    message += f"   ТП: {len(registry_tp_names)} шт.\n\n"
+                
+                if structure_tp_names:
+                    message += f"🗂️ **Структура сети** (найдено {structure_count} записей)\n"
+                    message += f"   ТП: {len(structure_tp_names)} шт.\n\n"
+                
+                message += "📌 Выберите ТП:\n"
+                message += "• Слева (📄) - просмотр договоров\n"
+                message += "• Справа (📍) - отправка уведомления"
+                
+                await update.message.reply_text(
+                    message,
+                    reply_markup=get_dual_search_keyboard(registry_tp_names, structure_tp_names),
+                    parse_mode='Markdown'
+                )
+        
+        elif user_states[user_id].get('action') == 'select_tp':
+            results = user_states[user_id].get('search_results', [])
+            filtered_results = [r for r in results if r['Наименование ТП'] == text]
+            
+            if filtered_results:
+                search_query = user_states[user_id].get('last_search_query')
+                await show_tp_results(update, filtered_results, text, search_query)
+                user_states[user_id]['action'] = 'search'
+            await update.message.reply_text("Выберите документ", reply_markup=get_reference_keyboard())
+            
+        # Обработка кнопки "Назад" для search_tp и send_notification
+        elif text == '⬅️ Назад':
             branch = user_states[user_id].get('branch')
             action = user_states[user_id].get('action')
             
@@ -1998,109 +2015,143 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_states[user_id]['action'] = None
                 await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
                 return
-            
-            # Для send_notification применяем существующую логику
-            elif state == 'send_notification':
-                action = user_states[user_id].get('action')
                 
-                # Если мы в процессе отправки уведомления, пришедшего из поиска
-                if 'last_search_tp' in user_states[user_id]:
-                    if action == 'select_vl':
-                        # Возвращаемся к результатам поиска
-                        user_states[user_id]['state'] = 'search_tp'
-                        user_states[user_id]['action'] = 'after_results'
-                        tp_name = user_states[user_id].get('last_search_tp', '')
-                        await update.message.reply_text(
-                            "Вернулись к результатам поиска",
-                            reply_markup=get_after_search_keyboard(tp_name)
-                        )
-                    elif action in ['send_location', 'request_photo', 'add_comment']:
-                        # Возвращаемся на шаг назад в процессе уведомления
-                        if action == 'send_location':
-                            # Возвращаемся к выбору ВЛ
-                            user_states[user_id]['action'] = 'select_vl'
-                            selected_tp = user_states[user_id].get('selected_tp')
+            # Для search_tp с action 'dual_search' (после двойного поиска)
+            elif state == 'search_tp' and action == 'dual_search':
+                user_states[user_id]['state'] = f'branch_{branch}'
+                user_states[user_id]['action'] = None
+                await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
+                return
+            
+        return  # Завершаем обработку search_tp
+    
+    # Обработка кнопки "Назад" для состояний с уведомлениями
+    if state == 'send_notification' and text == '⬅️ Назад':
+        action = user_states[user_id].get('action')
+        branch = user_states[user_id].get('branch')
+        
+        # Если мы в процессе отправки уведомления, пришедшего из поиска
+        if 'last_search_tp' in user_states[user_id]:
+            if action == 'select_vl':
+                # Возвращаемся к результатам поиска
+                user_states[user_id]['state'] = 'search_tp'
+                user_states[user_id]['action'] = 'after_results'
+                tp_name = user_states[user_id].get('last_search_tp', '')
+                search_query = user_states[user_id].get('last_search_query', tp_name)
+                await update.message.reply_text(
+                    "Вернулись к результатам поиска",
+                    reply_markup=get_after_search_keyboard(tp_name, search_query)
+                )
+            elif action in ['send_location', 'request_photo', 'add_comment']:
+                # Возвращаемся на шаг назад в процессе уведомления
+                if action == 'send_location':
+                    # Возвращаемся к выбору ВЛ
+                    user_states[user_id]['action'] = 'select_vl'
+                    selected_tp = user_states[user_id].get('selected_tp')
+                    
+                    # Перезагружаем данные из справочника для получения списка ВЛ
+                    branch = user_states[user_id].get('branch')
+                    network = user_states[user_id].get('network')
+                    
+                    # Проверяем права пользователя
+                    user_permissions = get_user_permissions(user_id)
+                    user_branch = user_permissions.get('branch')
+                    if user_branch and user_branch != 'All':
+                        branch = user_branch
+                    
+                    env_key = get_env_key_for_branch(branch, network, is_reference=True)
+                    csv_url = os.environ.get(env_key)
+                    
+                    if csv_url:
+                        data = load_csv_from_url(csv_url)
+                        results = search_tp_in_data(selected_tp, data, 'Наименование ТП')
+                        
+                        # Фильтруем по РЭС если нужно
+                        user_res = user_permissions.get('res')
+                        if user_res and user_res != 'All':
+                            results = [r for r in results if r.get('РЭС', '').strip() == user_res]
+                        
+                        if results:
+                            # ВАЖНО: Получаем ВСЕ уникальные ВЛ
+                            vl_list = list(set([r['Наименование ВЛ'] for r in results]))
+                            vl_list.sort()
                             
-                            # Перезагружаем данные из справочника для получения списка ВЛ
-                            branch = user_states[user_id].get('branch')
-                            network = user_states[user_id].get('network')
+                            logger.info(f"[handle_message] При возврате назад найдено {len(vl_list)} ВЛ")
                             
-                            # Проверяем права пользователя
-                            user_permissions = get_user_permissions(user_id)
-                            user_branch = user_permissions.get('branch')
-                            if user_branch and user_branch != 'All':
-                                branch = user_branch
-                            
-                            env_key = get_env_key_for_branch(branch, network, is_reference=True)
-                            csv_url = os.environ.get(env_key)
-                            
-                            if csv_url:
-                                data = load_csv_from_url(csv_url)
-                                results = search_tp_in_data(selected_tp, data, 'Наименование ТП')
-                                
-                                # Фильтруем по РЭС если нужно
-                                user_res = user_permissions.get('res')
-                                if user_res and user_res != 'All':
-                                    results = [r for r in results if r.get('РЭС', '').strip() == user_res]
-                                
-                                if results:
-                                    vl_list = list(set([r['Наименование ВЛ'] for r in results]))
-                                    keyboard = []
-                                    for vl in vl_list:
-                                        keyboard.append([vl])
-                                    keyboard.append(['🔍 Новый поиск'])
-                                    keyboard.append(['⬅️ Назад'])
-                                    
-                                    await update.message.reply_text(
-                                        f"📨 Отправка уведомления по ТП: {selected_tp}\n\n"
-                                        f"Выберите ВЛ:",
-                                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                                    )
-                                else:
-                                    await update.message.reply_text("❌ Не удалось загрузить список ВЛ")
-                            else:
-                                await update.message.reply_text("❌ Справочник не найден")
-                        elif action == 'request_photo':
-                            # Возвращаемся к отправке локации
-                            user_states[user_id]['action'] = 'send_location'
-                            keyboard = [[KeyboardButton("📍 Отправить местоположение", request_location=True)]]
-                            keyboard.append(['⬅️ Назад'])
-                            
-                            selected_tp = user_states[user_id].get('selected_tp')
-                            selected_vl = user_states[user_id].get('selected_vl')
-                            
-                            await update.message.reply_text(
-                                f"✅ Выбрана ВЛ: {selected_vl}\n"
-                                f"📍 ТП: {selected_tp}\n\n"
-                                "Теперь отправьте ваше местоположение:",
-                                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                            )
-                        elif action == 'add_comment':
-                            # Возвращаемся к запросу фото
-                            user_states[user_id]['action'] = 'request_photo'
-                            keyboard = [
-                                ['⏭ Пропустить и добавить комментарий'],
-                                ['📤 Отправить без фото и комментария'],
-                                ['⬅️ Назад']
-                            ]
-                            
-                            selected_tp = user_states[user_id].get('selected_tp')
-                            selected_vl = user_states[user_id].get('selected_vl')
+                            # Используем функцию для создания клавиатуры
+                            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
                             
                             await update.message.reply_text(
-                                f"📍 ТП: {selected_tp}\n"
-                                f"⚡ ВЛ: {selected_vl}\n\n"
-                                "📸 Сделайте фото бездоговорного ВОЛС\n\n"
-                                "Как отправить фото:\n"
-                                "📱 **Мобильный**: нажмите 📎 → Камера\n"
-                                "Или выберите действие ниже:",
-                                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
-                                parse_mode='Markdown'
+                                f"📨 Отправка уведомления по ТП: {selected_tp}\n"
+                                f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
+                                f"Выберите ВЛ:",
+                                reply_markup=reply_markup
                             )
+                        else:
+                            await update.message.reply_text("❌ Не удалось загрузить список ВЛ")
+                    else:
+                        await update.message.reply_text("❌ Справочник не найден")
+                elif action == 'request_photo':
+                    # Возвращаемся к отправке локации
+                    user_states[user_id]['action'] = 'send_location'
+                    keyboard = [[KeyboardButton("📍 Отправить местоположение", request_location=True)]]
+                    keyboard.append(['⬅️ Назад'])
+                    
+                    selected_tp = user_states[user_id].get('selected_tp')
+                    selected_vl = user_states[user_id].get('selected_vl')
+                    
+                    await update.message.reply_text(
+                        f"✅ Выбрана ВЛ: {selected_vl}\n"
+                        f"📍 ТП: {selected_tp}\n\n"
+                        "Теперь отправьте ваше местоположение:",
+                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                    )
+                elif action == 'add_comment':
+                    # Возвращаемся к запросу фото
+                    user_states[user_id]['action'] = 'request_photo'
+                    keyboard = [
+                        ['⏭ Пропустить и добавить комментарий'],
+                        ['📤 Отправить без фото и комментария'],
+                        ['⬅️ Назад']
+                    ]
+                    
+                    selected_tp = user_states[user_id].get('selected_tp')
+                    selected_vl = user_states[user_id].get('selected_vl')
+                    
+                    await update.message.reply_text(
+                        f"📍 ТП: {selected_tp}\n"
+                        f"⚡ ВЛ: {selected_vl}\n\n"
+                        "📸 Сделайте фото бездоговорного ВОЛС\n\n"
+                        "Как отправить фото:\n"
+                        "📱 **Мобильный**: нажмите 📎 → Камера\n"
+                        "Или выберите действие ниже:",
+                        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True),
+                        parse_mode='Markdown'
+                    )
+        else:
+            # Если пришли не из поиска - возвращаемся в меню филиала
+            user_states[user_id]['state'] = f'branch_{branch}'
+            await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
+        return
+    
+    # Обработка кнопки "Назад" для остальных состояний
+    if text == '⬅️ Назад':
+        if state == 'report_actions':
+            user_states[user_id]['state'] = 'reports'
+            await update.message.reply_text("Выберите тип отчета", reply_markup=get_reports_keyboard(permissions))
+        elif state.startswith('branch_'):
+            if permissions['branch'] != 'All':
+                user_states[user_id] = {'state': 'main'}
+                await update.message.reply_text("Главное меню", reply_markup=get_main_keyboard(permissions))
+            else:
+                network = user_states[user_id].get('network')
+                if network == 'RK':
+                    user_states[user_id] = {'state': 'rosseti_kuban', 'network': 'RK'}
+                    branches = ROSSETI_KUBAN_BRANCHES
                 else:
-                    # Если пришли не из поиска - возвращаемся в меню филиала
-                    user_states[user_id]['state'] = f'branch_{branch}'
-                    await update.message.reply_text(f"{branch}", reply_markup=get_branch_menu_keyboard())
+                    user_states[user_id] = {'state': 'rosseti_yug', 'network': 'UG'}
+                    branches = ROSSETI_YUG_BRANCHES
+                await update.message.reply_text("Выберите филиал", reply_markup=get_branch_keyboard(branches))
         return
     
     # Главное меню
@@ -2284,208 +2335,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Выберите документ",
                 reply_markup=get_reference_keyboard()
             )
-    
-    # Поиск ТП
-    elif state == 'search_tp':
-        if text == '🔍 Новый поиск':
-            user_states[user_id]['action'] = 'search'
-            keyboard = [['⬅️ Назад']]
-            await update.message.reply_text(
-                "🔍 Введите наименование ТП для поиска:",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            )
-        elif text.startswith('📨 Отправить уведомление'):
-            logger.info(f"Обработка кнопки отправки уведомления: '{text}'")
-            # Переход к отправке уведомления с уже найденной ТП
-            if 'last_search_tp' in user_states[user_id]:
-                selected_tp = user_states[user_id]['last_search_tp']
-                branch = user_states[user_id].get('branch')
-                network = user_states[user_id].get('network')
-                
-                logger.info(f"Найдена сохраненная ТП: {selected_tp}")
-                logger.info(f"Branch: {branch}, Network: {network}")
-                
-                # Проверяем права пользователя - может у него указан конкретный филиал
-                user_permissions = get_user_permissions(user_id)
-                user_branch = user_permissions.get('branch')
-                
-                # Если у пользователя указан конкретный филиал в правах - используем его БЕЗ нормализации
-                if user_branch and user_branch != 'All':
-                    branch = user_branch  # Используем как есть из прав (например "Сочинский")
-                    logger.info(f"Используем филиал из прав пользователя для отправки уведомления БЕЗ изменений: {branch}")
-                
-                # Загружаем справочник для поиска ВЛ
-                env_key = get_env_key_for_branch(branch, network, is_reference=True)
-                csv_url = os.environ.get(env_key)
-                
-                if not csv_url:
-                    await update.message.reply_text(f"❌ Справочник для филиала {branch} не найден")
-                    return
-                
-                loading_msg = await update.message.reply_text("🔍 Загружаю данные из справочника...")
-                
-                data = load_csv_from_url(csv_url)
-                results = search_tp_in_data(selected_tp, data, 'Наименование ТП')
-                
-                # Фильтруем по РЭС если у пользователя ограничения
-                user_res = user_permissions.get('res')
-                
-                if user_res and user_res != 'All':
-                    results = [r for r in results if r.get('РЭС', '').strip() == user_res]
-                
-                await loading_msg.delete()
-                
-                if not results:
-                    await update.message.reply_text("❌ ТП не найдена в справочнике")
-                    return
-                
-                # Переходим сразу к выбору ВЛ
-                user_states[user_id]['state'] = 'send_notification'
-                user_states[user_id]['action'] = 'select_vl'
-                user_states[user_id]['selected_tp'] = selected_tp
-                user_states[user_id]['tp_data'] = results[0]
-                user_states[user_id]['branch'] = branch  # Сохраняем branch
-                user_states[user_id]['network'] = network  # Сохраняем network
-                
-                logger.info(f"Сохранены данные для уведомления:")
-                logger.info(f"  selected_tp: {selected_tp}")
-                logger.info(f"  tp_data: {results[0]}")
-                logger.info(f"  branch: {branch}")
-                logger.info(f"  network: {network}")
-                
-                vl_list = list(set([r['Наименование ВЛ'] for r in results]))
-                
-                keyboard = []
-                for vl in vl_list:
-                    keyboard.append([vl])
-                keyboard.append(['🔍 Новый поиск'])
-                keyboard.append(['⬅️ Назад'])
-                
-                await update.message.reply_text(
-                    f"📨 Отправка уведомления по ТП: {selected_tp}\n\n"
-                    f"Выберите ВЛ:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-            else:
-                await update.message.reply_text("❌ Сначала выполните поиск ТП")
-        elif user_states[user_id].get('action') == 'search':
-            branch = user_states[user_id].get('branch')
-            network = user_states[user_id].get('network')
-            
-            # Проверяем права пользователя - может у него указан конкретный филиал
-            user_permissions = get_user_permissions(user_id)
-            user_branch = user_permissions.get('branch')
-            user_res = user_permissions.get('res')
-            
-            # Если у пользователя указан конкретный филиал в правах - используем его БЕЗ нормализации
-            if user_branch and user_branch != 'All':
-                branch = user_branch  # Используем как есть из прав (например "Сочинский")
-                logger.info(f"Используем филиал из прав пользователя БЕЗ изменений: {branch}")
-            else:
-                # Только если выбрали из меню - нормализуем
-                branch = normalize_branch_name(branch)
-            
-            logger.info(f"Поиск ТП для филиала: {branch}, сеть: {network}")
-            if user_res and user_res != 'All':
-                logger.info(f"Пользователь имеет доступ только к РЭС: {user_res}")
-            
-            search_messages = [
-                "🔍 Ищу информацию...",
-                "📡 Подключаюсь к базе данных...",
-                "📊 Анализирую данные...",
-                "🔄 Обрабатываю результаты..."
-            ]
-            
-            loading_msg = await update.message.reply_text(search_messages[0])
-            
-            for i, msg_text in enumerate(search_messages[1:], 1):
-                await asyncio.sleep(0.5)
-                try:
-                    await loading_msg.edit_text(msg_text)
-                except Exception:
-                    pass
-            
-            env_key = get_env_key_for_branch(branch, network)
-            csv_url = os.environ.get(env_key)
-            
-            logger.info(f"Итоговые параметры поиска:")
-            logger.info(f"  Филиал: {branch}")
-            logger.info(f"  Сеть: {network}")
-            logger.info(f"  Ключ переменной: {env_key}")
-            logger.info(f"  URL из переменной: {csv_url}")
-            
-            if not csv_url:
-                available_vars = [key for key in os.environ.keys() if 'URL' in key and network in key]
-                logger.error(f"Доступные переменные для {network}: {available_vars}")
-                await loading_msg.delete()
-                await update.message.reply_text(
-                    f"❌ Данные для филиала {branch} не найдены\n"
-                    f"Искали переменную: {env_key}\n"
-                    f"Доступные: {', '.join(available_vars[:5])}"
-                )
-                return
-            
-            data = load_csv_from_url(csv_url)
-            results = search_tp_in_data(text, data, 'Наименование ТП')
-            
-            # Если у пользователя указан конкретный РЭС - фильтруем результаты
-            if user_res and user_res != 'All':
-                filtered_results = [r for r in results if r.get('РЭС', '').strip() == user_res]
-                
-                await loading_msg.delete()
-                
-                if not filtered_results:
-                    # Проверяем, были ли вообще результаты до фильтрации
-                    if results:
-                        await update.message.reply_text(
-                            f"❌ В {user_res} РЭС запрашиваемая ТП не найдена.\n\n"
-                            f"ℹ️ Данная ТП присутствует в других РЭС филиала {branch}."
-                        )
-                    else:
-                        await update.message.reply_text(
-                            f"❌ ТП не найдена в {user_res} РЭС.\n\n"
-                            "Попробуйте другой запрос."
-                        )
-                    return
-                
-                results = filtered_results
-            else:
-                await loading_msg.delete()
-                
-                if not results:
-                    await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
-                    return
-            
-            tp_list = list(set([r['Наименование ТП'] for r in results]))
-            
-            if len(tp_list) == 1:
-                # Если найдена только одна ТП, сразу показываем результаты
-                await show_tp_results(update, results, tp_list[0])
-                # Устанавливаем action для корректной работы кнопок
-                user_states[user_id]['action'] = 'after_results'
-            else:
-                # Показываем ВСЕ найденные ТП без ограничения
-                keyboard = []
-                for tp in tp_list:  # Убрали [:10] - показываем все
-                    keyboard.append([tp])
-                keyboard.append(['⬅️ Назад'])
-                
-                user_states[user_id]['search_results'] = results
-                user_states[user_id]['action'] = 'select_tp'
-                
-                await update.message.reply_text(
-                    f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-                )
-        
-        elif user_states[user_id].get('action') == 'select_tp':
-            results = user_states[user_id].get('search_results', [])
-            filtered_results = [r for r in results if r['Наименование ТП'] == text]
-            
-            if filtered_results:
-                await show_tp_results(update, filtered_results, text)
-                user_states[user_id]['action'] = 'search'
-        
+    # ЧАСТЬ 5.3 КОНЕЦ====================================================================================================================
+           
+# ЧАСТЬ ФИНАЛ=======================================================================================================================
+
+   
     # Уведомление - поиск ТП
     elif state == 'send_notification' and user_states[user_id].get('action') == 'notification_tp':
         branch = user_states[user_id].get('branch')
@@ -2561,19 +2415,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ ТП не найдено. Попробуйте другой запрос.")
                 return
         
+        # ВАЖНО: Получаем ВСЕ уникальные ТП
         tp_list = list(set([r['Наименование ТП'] for r in results]))
         
-        keyboard = []
-        for tp in tp_list:  # Показываем ВСЕ найденные ТП
-            keyboard.append([tp])
-        keyboard.append(['⬅️ Назад'])
+        logger.info(f"[handle_message] Для уведомления найдено {len(tp_list)} уникальных ТП")
         
         user_states[user_id]['notification_results'] = results
         user_states[user_id]['action'] = 'select_notification_tp'
         
+        # Используем функцию для создания клавиатуры
+        reply_markup = get_tp_selection_keyboard(tp_list)
+        
         await update.message.reply_text(
             f"✅ Найдено {len(tp_list)} ТП. Выберите нужную:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            reply_markup=reply_markup
         )
     
     # Выбор ТП для уведомления
@@ -2585,20 +2440,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['selected_tp'] = text
             user_states[user_id]['tp_data'] = filtered_results[0]
             
+            # ВАЖНО: Получаем ВСЕ уникальные ВЛ для выбранной ТП
             vl_list = list(set([r['Наименование ВЛ'] for r in filtered_results]))
+            vl_list.sort()
             
-            keyboard = []
-            for vl in vl_list:
-                keyboard.append([vl])
-            keyboard.append(['🔍 Новый поиск'])
-            keyboard.append(['⬅️ Назад'])
+            logger.info(f"[handle_message] Для ТП {text} найдено {len(vl_list)} уникальных ВЛ")
             
             user_states[user_id]['action'] = 'select_vl'
             
+            # Используем функцию для создания клавиатуры
+            reply_markup = get_vl_selection_keyboard(vl_list, text)
+            
             await update.message.reply_text(
-                f"📨 Отправка уведомления по ТП: {text}\n\n"
+                f"📨 Отправка уведомления по ТП: {text}\n"
+                f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
                 f"Выберите ВЛ:",
-                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                reply_markup=reply_markup
             )
     
     # Выбор ВЛ
@@ -2610,6 +2467,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Очищаем данные предыдущего поиска
             if 'last_search_tp' in user_states[user_id]:
                 del user_states[user_id]['last_search_tp']
+            if 'last_search_query' in user_states[user_id]:
+                del user_states[user_id]['last_search_query']
             keyboard = [['⬅️ Назад']]
             await update.message.reply_text(
                 "🔍 Введите наименование ТП для поиска:",
@@ -3046,6 +2905,386 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception:
         pass
+
+# ==================== ДОБАВЛЯЕМ НЕДОСТАЮЩИЕ ФУНКЦИИ ====================
+
+async def generate_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
+    """Генерация отчета по уведомлениям"""
+    loading_msg = await update.message.reply_text("📊 Генерирую отчет...")
+    
+    # Фильтруем уведомления
+    notifications = notifications_storage.get(network, [])
+    
+    if not notifications:
+        await loading_msg.delete()
+        await update.message.reply_text(
+            f"📊 Нет данных для отчета по {'РОССЕТИ КУБАНЬ' if network == 'RK' else 'РОССЕТИ ЮГ'}"
+        )
+        return
+    
+    # Создаем DataFrame - БЕЗ ID!
+    report_data = []
+    for notif in notifications:
+        report_data.append({
+            'Филиал': notif['branch'],
+            'РЭС': notif['res'],
+            'ТП': notif['tp'],
+            'ВЛ': notif['vl'],
+            'Отправитель': notif['sender_name'],
+            'Получатель': notif['recipient_name'],
+            'Дата и время': notif['datetime'],
+            'Координаты': notif['coordinates'],
+            'Комментарий': notif['comment'],
+            'Фото': 'Да' if notif['has_photo'] else 'Нет'  # Преобразуем в Да/Нет
+        })
+    
+    df = pd.DataFrame(report_data)
+    
+    # Создаем Excel файл
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Уведомления', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Уведомления']
+        
+        # Форматирование
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#4472C4',
+            'font_color': 'white',
+            'border': 1
+        })
+        
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # Автоподбор ширины колонок
+        for i, col in enumerate(df.columns):
+            # Безопасно вычисляем максимальную длину
+            try:
+                max_len = df[col].astype(str).str.len().max()
+                # Проверяем на NaN
+                if pd.isna(max_len):
+                    max_len = 10
+                column_len = max(int(max_len), len(col)) + 2
+            except:
+                column_len = len(col) + 2
+            
+            worksheet.set_column(i, i, column_len)
+    
+    buffer.seek(0)
+    
+    # Отправляем файл
+    network_name = 'РОССЕТИ КУБАНЬ' if network == 'RK' else 'РОССЕТИ ЮГ'
+    filename = f"Уведомления_{network_name}_{get_moscow_time().strftime('%d.%m.%Y_%H%M')}.xlsx"
+    
+    await loading_msg.delete()
+    
+    caption = f"📊 Отчет по уведомлениям {network_name}\n"
+    caption += f"Период: все время\n"
+    caption += f"Всего уведомлений: {len(notifications)}"
+    
+    await update.message.reply_document(
+        document=InputFile(buffer, filename=filename),
+        caption=caption
+    )
+    
+    # Сохраняем информацию об отчете
+    user_id = str(update.effective_user.id)
+    user_states[user_id]['state'] = 'report_actions'
+    user_states[user_id]['last_report'] = {
+        'filename': filename,
+        'caption': caption,
+        'data': buffer.getvalue()
+    }
+    
+    await update.message.reply_text(
+        "Отчет сгенерирован",
+        reply_markup=get_report_action_keyboard()
+    )
+
+async def generate_activity_report(update: Update, context: ContextTypes.DEFAULT_TYPE, network: str, permissions: Dict):
+    """Генерация отчета по активности"""
+    loading_msg = await update.message.reply_text("📊 Генерирую отчет активности...")
+    
+    # Собираем данные об активности - БЕЗ ID!
+    activity_data = []
+    for uid, activity in user_activity.items():
+        user_data = users_cache.get(uid, {})
+        if network == 'RK' and user_data.get('visibility') in ['All', 'RK']:
+            activity_data.append({
+                'ФИО': user_data.get('name', 'Неизвестный'),
+                'Филиал': user_data.get('branch', '-'),
+                'РЭС': user_data.get('res', '-'),
+                'Последняя активность': activity['last_activity'].strftime('%d.%m.%Y %H:%M'),
+                'Количество уведомлений': activity['count']
+            })
+        elif network == 'UG' and user_data.get('visibility') in ['All', 'UG']:
+            activity_data.append({
+                'ФИО': user_data.get('name', 'Неизвестный'),
+                'Филиал': user_data.get('branch', '-'),
+                'РЭС': user_data.get('res', '-'),
+                'Последняя активность': activity['last_activity'].strftime('%d.%m.%Y %H:%M'),
+                'Количество уведомлений': activity['count']
+            })
+    
+    if not activity_data:
+        await loading_msg.delete()
+        await update.message.reply_text(
+            f"📊 Нет данных по активности для {'РОССЕТИ КУБАНЬ' if network == 'RK' else 'РОССЕТИ ЮГ'}"
+        )
+        return
+    
+    # Создаем DataFrame
+    df = pd.DataFrame(activity_data)
+    
+    # Создаем Excel файл
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Активность', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Активность']
+        
+        # Форматирование
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#70AD47',
+            'font_color': 'white',
+            'border': 1
+        })
+        
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # Автоподбор ширины колонок
+        for i, col in enumerate(df.columns):
+            # Безопасно вычисляем максимальную длину
+            try:
+                max_len = df[col].astype(str).str.len().max()
+                # Проверяем на NaN
+                if pd.isna(max_len):
+                    max_len = 10
+                column_len = max(int(max_len), len(col)) + 2
+            except:
+                column_len = len(col) + 2
+            
+            worksheet.set_column(i, i, column_len)
+    
+    buffer.seek(0)
+    
+    # Отправляем файл
+    network_name = 'РОССЕТИ КУБАНЬ' if network == 'RK' else 'РОССЕТИ ЮГ'
+    filename = f"Активность_{network_name}_{get_moscow_time().strftime('%d.%m.%Y_%H%M')}.xlsx"
+    
+    await loading_msg.delete()
+    
+    caption = f"📈 Отчет по активности пользователей {network_name}\n"
+    caption += f"Всего активных пользователей: {len(activity_data)}"
+    
+    await update.message.reply_document(
+        document=InputFile(buffer, filename=filename),
+        caption=caption
+    )
+    
+    # Сохраняем информацию об отчете
+    user_id = str(update.effective_user.id)
+    user_states[user_id]['state'] = 'report_actions'
+    user_states[user_id]['last_report'] = {
+        'filename': filename,
+        'caption': caption,
+        'data': buffer.getvalue()
+    }
+    
+    await update.message.reply_text(
+        "Отчет сгенерирован",
+        reply_markup=get_report_action_keyboard()
+    )
+
+async def generate_ping_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Генерация отчета о статусе пользователей"""
+    loading_msg = await update.message.reply_text("🔄 Проверяю статус пользователей...")
+    
+    ping_data = []
+    total_users = len(users_cache)
+    active_users = 0
+    blocked_users = 0
+    never_started = 0
+    
+    for uid, user_data in users_cache.items():
+        status = "❓ Неизвестно"
+        last_activity = "-"
+        
+        # Проверяем, запускал ли пользователь бота
+        if uid in bot_users:
+            last_start = bot_users[uid]['last_start']
+            last_activity = last_start.strftime('%d.%m.%Y %H:%M')
+            status = "✅ Активен"
+            active_users += 1
+        else:
+            status = "⏸️ Не запускал"
+            never_started += 1
+        
+        ping_data.append({
+            'ID': uid,
+            'ФИО': user_data.get('name', 'Неизвестный'),
+            'Филиал': user_data.get('branch', '-'),
+            'РЭС': user_data.get('res', '-'),
+            'Статус': status,
+            'Последний запуск': last_activity
+        })
+    
+    # Создаем DataFrame
+    df = pd.DataFrame(ping_data)
+    
+    # Создаем Excel файл
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+        df.to_excel(writer, sheet_name='Статус пользователей', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Статус пользователей']
+        
+        # Форматирование
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#FFC000',
+            'font_color': 'black',
+            'border': 1
+        })
+        
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+        
+        # Автоподбор ширины колонок
+        for i, col in enumerate(df.columns):
+            # Безопасно вычисляем максимальную длину
+            try:
+                max_len = df[col].astype(str).str.len().max()
+                # Проверяем на NaN
+                if pd.isna(max_len):
+                    max_len = 10
+                column_len = max(int(max_len), len(col)) + 2
+            except:
+                column_len = len(col) + 2
+            
+            worksheet.set_column(i, i, column_len)
+    
+    buffer.seek(0)
+    
+    # Отправляем файл
+    filename = f"Статус_пользователей_{get_moscow_time().strftime('%d.%m.%Y_%H%M')}.xlsx"
+    
+    await loading_msg.delete()
+    
+    caption = f"""📊 Статус пользователей бота
+
+👥 Всего пользователей: {total_users}
+✅ Активных (запускали бота): {active_users}
+⏸️ Не запускали: {never_started}
+
+⚠️ Данные о запусках сохраняются только с момента последнего обновления бота"""
+    
+    await update.message.reply_document(
+        document=InputFile(buffer, filename=filename),
+        caption=caption
+    )
+
+async def notify_restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Уведомление о перезапуске бота"""
+    loading_msg = await update.message.reply_text("🔄 Отправляю уведомления о перезапуске...")
+    
+    success_count = 0
+    failed_count = 0
+    
+    message_text = """🔄 Бот ВОЛС Ассистент был обновлен!
+
+✨ Что нового:
+• Улучшена стабильность работы
+• Оптимизирована скорость загрузки данных
+• Исправлены мелкие ошибки
+
+Для продолжения работы используйте команду /start"""
+    
+    for uid in bot_users.keys():
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=message_text
+            )
+            success_count += 1
+            await asyncio.sleep(0.1)  # Защита от лимитов
+        except Exception as e:
+            logger.error(f"Не удалось отправить уведомление пользователю {uid}: {e}")
+            failed_count += 1
+    
+    await loading_msg.delete()
+    
+    result_text = f"""✅ Уведомление о перезапуске отправлено
+
+📨 Успешно: {success_count}
+❌ Не доставлено: {failed_count}"""
+    
+    await update.message.reply_text(result_text)
+
+async def handle_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка массовой рассылки"""
+    user_id = str(update.effective_user.id)
+    text = update.message.text
+    
+    if text == '❌ Отмена':
+        user_states[user_id] = {'state': 'main'}
+        permissions = get_user_permissions(user_id)
+        await update.message.reply_text(
+            "Рассылка отменена",
+            reply_markup=get_main_keyboard(permissions)
+        )
+        return
+    
+    broadcast_type = user_states[user_id].get('broadcast_type', 'bot_users')
+    
+    loading_msg = await update.message.reply_text("📤 Начинаю рассылку...")
+    
+    success_count = 0
+    failed_count = 0
+    
+    # Определяем получателей
+    if broadcast_type == 'bot_users':
+        recipients = list(bot_users.keys())
+    else:
+        recipients = list(users_cache.keys())
+    
+    # Отправляем сообщения
+    for uid in recipients:
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=text,
+                parse_mode='Markdown'
+            )
+            success_count += 1
+            await asyncio.sleep(0.1)  # Защита от лимитов
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение пользователю {uid}: {e}")
+            failed_count += 1
+    
+    await loading_msg.delete()
+    
+    # Результат
+    result_text = f"""✅ Рассылка завершена!
+
+📨 Успешно отправлено: {success_count}
+❌ Не доставлено: {failed_count}
+📊 Всего получателей: {len(recipients)}"""
+    
+    user_states[user_id] = {'state': 'main'}
+    permissions = get_user_permissions(user_id)
+    
+    await update.message.reply_text(
+        result_text,
+        reply_markup=get_main_keyboard(permissions)
+    )
 
 # ==================== ФОНОВЫЕ ЗАДАЧИ ====================
 

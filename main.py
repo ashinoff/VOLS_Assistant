@@ -127,18 +127,27 @@ BOT_USERS_FILE = os.environ.get('BOT_USERS_FILE', 'bot_users.json')
 # ЧАСТЬ 2 ==================== УЛУЧШЕННЫЕ ФУНКЦИИ ПОИСКА ============================================================================================================
 
 
-
+# ЧАСТЬ 2 ==================== УЛУЧШЕННЫЕ ФУНКЦИИ ПОИСКА ============================================================================================================
 
 def normalize_tp_name_advanced(name: str) -> str:
     """Улучшенная нормализация имени ТП для поиска"""
     if not name:
         return ""
     
+    # НОВОЕ: Убираем префиксы вида 1), 2) и т.д. в начале строки
+    name = re.sub(r'^\d+\)\s*', '', name)
+    
     # Приводим к верхнему регистру
     name = name.upper()
     
-    # Оставляем буквы, цифры, дефисы и пробелы
-    name = re.sub(r'[^\w\s\-А-Яа-я]', '', name, flags=re.UNICODE)
+    # НОВОЕ: Заменяем точки с запятой на дефисы для унификации
+    name = name.replace(';', '-')
+    
+    # НОВОЕ: Заменяем множественные дефисы на одинарные
+    name = re.sub(r'-+', '-', name)
+    
+    # Оставляем буквы, цифры, дефисы, пробелы и слэши
+    name = re.sub(r'[^\w\s\-/А-Яа-я]', '', name, flags=re.UNICODE)
     
     # Убираем лишние пробелы
     name = ' '.join(name.split())
@@ -146,8 +155,7 @@ def normalize_tp_name_advanced(name: str) -> str:
     return name
 
 def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> List[Dict]:
-    """Гибкий поиск ТП с поддержкой частичных совпадений
-    Примеры: для ТП-ТР-7-774 найдет по запросам ТПТР77, ТР774, тр-777, тр7-774"""
+    """Гибкий поиск ТП с поддержкой частичных совпадений и сложных названий"""
     if not tp_query or not data:
         return []
     
@@ -155,22 +163,30 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
     normalized_query = normalize_tp_name_advanced(tp_query)
     
     # Создаем версию запроса без дефисов и пробелов для гибкого поиска
-    query_compact = normalized_query.replace('-', '').replace(' ', '')
+    query_compact = normalized_query.replace('-', '').replace(' ', '').replace('/', '')
+    
+    # НОВОЕ: Создаем упрощенную версию запроса для кабельных линий
+    query_simplified = simplify_cable_name(normalized_query)
     
     # Извлекаем все буквенные и цифровые части
     query_letter_parts = re.findall(r'[А-ЯA-Z]+', query_compact)
     query_digit_parts = re.findall(r'\d+', query_compact)
     
     results = []
-    seen_tp = set()  # Для избежания дубликатов
+    # ИСПРАВЛЕНО: Убрали seen_tp - больше не фильтруем дубликаты!
     
     for row in data:
-        tp_name = row.get(column, '')
-        if not tp_name:
+        tp_name_original = row.get(column, '')
+        if not tp_name_original:
             continue
-            
-        normalized_tp = normalize_tp_name_advanced(tp_name)
-        tp_compact = normalized_tp.replace('-', '').replace(' ', '')
+        
+        # НОВОЕ: Убираем префиксы перед нормализацией
+        tp_name_clean = re.sub(r'^\d+\)\s*', '', tp_name_original)
+        normalized_tp = normalize_tp_name_advanced(tp_name_clean)
+        tp_compact = normalized_tp.replace('-', '').replace(' ', '').replace('/', '')
+        
+        # НОВОЕ: Упрощенная версия для кабельных линий
+        tp_simplified = simplify_cable_name(normalized_tp)
         
         # Извлекаем буквенные и цифровые части из названия ТП
         tp_letter_parts = re.findall(r'[А-ЯA-Z]+', tp_compact)
@@ -178,26 +194,31 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
         
         # 1. Точное совпадение (с учетом дефисов)
         if normalized_query == normalized_tp:
-            if tp_name not in seen_tp:
-                results.append(row)
-                seen_tp.add(tp_name)
+            # ИСПРАВЛЕНО: убрали проверку seen_tp
+            results.append(row)
             continue
         
         # 2. Точное совпадение без дефисов
         if query_compact == tp_compact:
-            if tp_name not in seen_tp:
-                results.append(row)
-                seen_tp.add(tp_name)
+            results.append(row)
             continue
         
-        # 3. Поиск вхождения компактной версии
-        if query_compact in tp_compact:
-            if tp_name not in seen_tp:
-                results.append(row)
-                seen_tp.add(tp_name)
+        # 3. НОВОЕ: Совпадение упрощенных версий для кабельных линий
+        if query_simplified and tp_simplified and query_simplified in tp_simplified:
+            results.append(row)
             continue
         
-        # 4. Гибкий поиск по частям
+        # 4. Поиск вхождения компактной версии
+        if len(query_compact) >= 4 and query_compact in tp_compact:
+            results.append(row)
+            continue
+        
+        # 5. НОВОЕ: Поиск ключевых слов для кабельных линий
+        if is_cable_line_match(normalized_query, normalized_tp):
+            results.append(row)
+            continue
+        
+        # 6. Гибкий поиск по частям (существующая логика)
         match_found = False
         
         # Проверяем буквенные части
@@ -217,17 +238,11 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
             if all_letters_found:
                 # Теперь проверяем цифровые части
                 if query_digit_parts:
-                    # ВАЖНО: Ищем цифры как последовательность в исходной строке
-                    # Чтобы не находить 77 в 3-770 или 9-779
-                    
                     # Объединяем цифры из запроса
                     query_digits_str = ''.join(query_digit_parts)
                     
-                    # Ищем эту последовательность цифр в компактной версии ТП
-                    # но учитываем позиции букв и цифр
+                    # Ищем эту последовательность цифр
                     if len(query_digit_parts) == 1:
-                        # Если в запросе одна группа цифр (например "77")
-                        # Проверяем, есть ли она как отдельная группа или начало группы в ТП
                         digit_found = False
                         for tp_digit in tp_digit_parts:
                             if tp_digit.startswith(query_digits_str):
@@ -237,7 +252,6 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
                             match_found = True
                     else:
                         # Если в запросе несколько групп цифр
-                        # Проверяем их последовательно
                         digits_match = True
                         for i, query_digit in enumerate(query_digit_parts):
                             if i < len(tp_digit_parts):
@@ -253,9 +267,8 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
                     # Если в запросе нет цифр, но все буквы найдены
                     match_found = True
         
-        # 5. Если в запросе только цифры
+        # 7. Если в запросе только цифры
         elif query_digit_parts and not query_letter_parts:
-            # Для запроса только с цифрами - ищем как отдельную группу
             query_digits_str = ''.join(query_digit_parts)
             
             # Проверяем каждую группу цифр в ТП
@@ -268,14 +281,83 @@ def search_tp_in_data_advanced(tp_query: str, data: List[Dict], column: str) -> 
             if digit_found:
                 match_found = True
         
-        if match_found and tp_name not in seen_tp:
+        # ИСПРАВЛЕНО: убрали проверку seen_tp
+        if match_found:
             results.append(row)
-            seen_tp.add(tp_name)
     
     logger.info(f"[search_tp_in_data_advanced] Запрос: '{tp_query}', найдено записей: {len(results)}")
     return results
 
-# Оставляем старую функцию для совместимости
+# НОВЫЕ вспомогательные функции для работы с кабельными линиями
+def simplify_cable_name(name: str) -> str:
+    """Упрощение названия кабельной линии для поиска"""
+    if not name:
+        return ""
+    
+    # Извлекаем ключевые компоненты кабельной линии
+    # Например: КЛ-35-кВ -> КЛ35
+    simplified = name.upper()
+    
+    # Убираем кВ, ПС и другие общие сокращения
+    simplified = re.sub(r'\bКВ\b', '', simplified)
+    simplified = re.sub(r'\bПС\b', '', simplified)
+    simplified = re.sub(r'\bКРУ\b', '', simplified)
+    simplified = re.sub(r'\bЯЧ\b', '', simplified)
+    
+    # Убираем все не-буквенно-цифровые символы
+    simplified = re.sub(r'[^\w]', '', simplified)
+    
+    return simplified
+
+def is_cable_line_match(query: str, tp_name: str) -> bool:
+    """Проверка соответствия для кабельных линий"""
+    # Проверяем, является ли это кабельной линией
+    if not ('КЛ' in query.upper() or 'КЛ' in tp_name.upper()):
+        return False
+    
+    # Извлекаем ключевые параметры кабельной линии
+    query_params = extract_cable_params(query)
+    tp_params = extract_cable_params(tp_name)
+    
+    # Сравниваем ключевые параметры
+    if query_params and tp_params:
+        # Проверяем напряжение
+        if query_params.get('voltage') and tp_params.get('voltage'):
+            if query_params['voltage'] != tp_params['voltage']:
+                return False
+        
+        # Проверяем название подстанции/фидера
+        if query_params.get('station') and tp_params.get('station'):
+            if query_params['station'] in tp_params['station'] or tp_params['station'] in query_params['station']:
+                return True
+    
+    return False
+
+def extract_cable_params(name: str) -> Dict:
+    """Извлечение параметров кабельной линии"""
+    params = {}
+    
+    # Извлекаем напряжение (например, 35, 110)
+    voltage_match = re.search(r'(\d+)\s*КВ', name.upper())
+    if not voltage_match:
+        voltage_match = re.search(r'КЛ\s*(\d+)', name.upper())
+    if voltage_match:
+        params['voltage'] = voltage_match.group(1)
+    
+    # Извлекаем название станции/подстанции
+    # Ищем слова после ПС или в конце строки
+    station_match = re.search(r'ПС[^\w]*([\w-]+)', name.upper())
+    if station_match:
+        params['station'] = station_match.group(1)
+    else:
+        # Берем последнее значимое слово
+        words = re.findall(r'[А-Я][А-Я]+', name.upper())
+        if words and len(words[-1]) > 3:  # Исключаем короткие аббревиатуры
+            params['station'] = words[-1]
+    
+    return params
+
+# Оставляем старые функции для совместимости
 def normalize_tp_name(name: str) -> str:
     """Нормализовать название ТП для поиска (старая версия)"""
     return ''.join(filter(str.isdigit, name))
@@ -284,7 +366,7 @@ def search_tp_in_data(tp_query: str, data: List[Dict], column: str) -> List[Dict
     """Поиск ТП в данных (использует улучшенную версию)"""
     return search_tp_in_data_advanced(tp_query, data, column)
 
-# Новая функция для двойного поиска
+# Новая функция для двойного поиска (БЕЗ ИЗМЕНЕНИЙ)
 async def search_tp_in_both_catalogs(tp_query: str, branch: str, network: str, user_res: str = None) -> Dict:
     """Поиск ТП одновременно в реестре договоров и структуре сети
     ВАЖНО: Возвращает ВСЕ записи для найденных ТП"""
@@ -330,6 +412,8 @@ async def search_tp_in_both_catalogs(tp_query: str, branch: str, network: str, u
         logger.info(f"[search_tp_in_both_catalogs] Структура: найдено {len(structure_results)} записей, {len(result['structure_tp_names'])} уникальных ТП")
     
     return result
+
+# ОСТАЛЬНЫЕ ФУНКЦИИ БЕЗ ИЗМЕНЕНИЙ (load_csv_from_url_async, load_csv_from_url, preload_csv_files)
 
 # ==================== АСИНХРОННАЯ ЗАГРУЗКА CSV ====================
 
@@ -449,6 +533,8 @@ async def preload_csv_files():
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"❌ Ошибка загрузки {csv_urls[i]}: {result}")
+
+# чАСТЬ 2 КОНЕЦ    ==================================================================================================================================================
 
 
 
@@ -932,7 +1018,7 @@ def get_all_contractors_sorted(data: List[Dict]) -> List[str]:
 
 # ЧАСТЬ 3 КОНЕЦ==============================================================================================================================
 # ЧАСТЬ 4 === ФУНКЦИИ КЛАВИАТУР ==================================================================================================================
-# ЧАСТЬ 4 === ФУНКЦИИ КЛАВИАТУР ==================================================================================================================
+
 
 # ВАЖНО: Максимальное количество кнопок перед кнопкой "Назад"
 MAX_BUTTONS_BEFORE_BACK = 40  # Telegram позволяет до ~100 кнопок, но для удобства ограничим
@@ -1205,20 +1291,38 @@ def get_tp_selection_keyboard(tp_list: List[str]) -> ReplyKeyboardMarkup:
     
     # Добавляем ТП как кнопки
     for tp in tp_display:
-        keyboard.append([tp])
+        # ИЗМЕНЕНО: Обрезаем слишком длинные названия для отображения
+        display_name = tp
+        
+        # Убираем префикс для отображения если название слишком длинное
+        if len(tp) > 40:
+            # Пробуем убрать префикс
+            tp_no_prefix = re.sub(r'^\d+\)\s*', '', tp)
+            if len(tp_no_prefix) < len(tp):
+                display_name = tp_no_prefix[:37] + '...' if len(tp_no_prefix) > 40 else tp_no_prefix
+            else:
+                display_name = tp[:37] + '...'
+        
+        # ВАЖНО: В значение кнопки передаем ПОЛНОЕ название
+        keyboard.append([tp])  # Не display_name, а полное tp!
     
     keyboard.append(['⬅️ Назад', '🏠 Главная', '🔄 Рестарт'])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ВАЖНАЯ ФУНКЦИЯ! Клавиатура для выбора ВЛ
-def get_vl_selection_keyboard(vl_list: List[str], tp_name: str) -> ReplyKeyboardMarkup:
+# ВАЖНАЯ ФУНКЦИЯ! Клавиатура для выбора ВЛ - ОБНОВЛЕНА С ПАРАМЕТРОМ from_dual_search
+def get_vl_selection_keyboard(vl_list: List[str], tp_name: str, from_dual_search: bool = False) -> ReplyKeyboardMarkup:
     """Клавиатура для выбора ВЛ с ограничением количества"""
     keyboard = []
     
-    # Ограничиваем количество ВЛ (учитываем навигационную строку и кнопку поиска)
-    vl_truncated = len(vl_list) > MAX_BUTTONS_BEFORE_BACK - 2  # -2 для навигации и поиска
-    vl_display = vl_list[:MAX_BUTTONS_BEFORE_BACK - 2]
+    # Ограничиваем количество ВЛ 
+    if from_dual_search:
+        # Если есть кнопка возврата к результатам - учитываем её
+        vl_truncated = len(vl_list) > MAX_BUTTONS_BEFORE_BACK - 3  # -3 для навигации, поиска и возврата
+        vl_display = vl_list[:MAX_BUTTONS_BEFORE_BACK - 3]
+    else:
+        vl_truncated = len(vl_list) > MAX_BUTTONS_BEFORE_BACK - 2  # -2 для навигации и поиска
+        vl_display = vl_list[:MAX_BUTTONS_BEFORE_BACK - 2]
     
     logger.info(f"[get_vl_selection_keyboard] Создаю клавиатуру для {len(vl_list)} ВЛ на ТП {tp_name} (показано: {len(vl_display)})")
     
@@ -1232,6 +1336,10 @@ def get_vl_selection_keyboard(vl_list: List[str], tp_name: str) -> ReplyKeyboard
     # Добавляем ВЛ как кнопки
     for vl in vl_display_sorted:
         keyboard.append([vl])
+    
+    # НОВОЕ: Если пришли из двойного поиска - добавляем кнопку возврата
+    if from_dual_search:
+        keyboard.append(['⬅️ Вернуться к результатам поиска'])
     
     keyboard.append(['🔍 Новый поиск'])
     keyboard.append(['⬅️ Назад', '🏠 Главная', '🔄 Рестарт'])
@@ -1334,6 +1442,7 @@ def get_contractor_actions_keyboard() -> ReplyKeyboardMarkup:
 
 
  
+    #чАСТЬ 4 КОНЕЦ ==============================================================================================================================================
     #чАСТЬ 4 КОНЕЦ ==============================================================================================================================================
  # ЧАСТЬ 5.1 ========= EMAIL ФУНКЦИИ ============================================================================================================================
 
@@ -1807,7 +1916,8 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"[send_notification] ВЛ: {vl_list}")
             
             # Используем новую функцию для создания клавиатуры
-            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+            from_dual_search = user_states[user_id].get('from_dual_search', False) 
+            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp, from_dual_search)
             
             await update.message.reply_text(
                 result_text + f"\n\n✨ Можете отправить еще уведомление по этой же ТП:\n📍 ТП: {selected_tp}\n\nВыберите ВЛ:",
@@ -1839,8 +1949,7 @@ async def send_notification(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== ПОКАЗ РЕЗУЛЬТАТОВ ПОИСКА ====================
 
 async def show_tp_results(update: Update, results: List[Dict], tp_name: str, search_query: str = None):
-    """Показать результаты поиска по ТП
-    ИСПРАВЛЕНО: Теперь показывает ВСЕ ВЛ и ВСЕ записи для каждой ВЛ!"""
+    """Показать результаты поиска по ТП - ПОКАЗЫВАЕТ ВСЕ ЗАПИСИ БЕЗ ГРУППИРОВКИ"""
     if not results:
         await update.message.reply_text("❌ Результаты не найдены")
         return
@@ -1857,74 +1966,44 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str, sea
     
     res_name = results[0].get('РЭС', 'Неизвестный')
     
-    # Группируем результаты по ВЛ
-    vl_groups = {}
-    for result in results:
-        vl = result.get('Наименование ВЛ', '-')
-        if vl not in vl_groups:
-            vl_groups[vl] = []
-        vl_groups[vl].append(result)
-    
-    logger.info(f"[show_tp_results] Найдено уникальных ВЛ: {len(vl_groups)}")
-    logger.info(f"[show_tp_results] ВЛ: {list(vl_groups.keys())}")
-    
     # Формируем заголовок сообщения
-    message = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n"
-    message += f"🔌 Уникальных ВЛ: {len(vl_groups)}\n\n"
+    message = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
     
-    # Формируем сообщение по группам ВЛ
-    for vl, vl_results in sorted(vl_groups.items()):
-        message += f"⚡ **ВЛ: {vl}**\n"
+    # ИЗМЕНЕНО: Показываем ВСЕ записи без группировки
+    for i, result in enumerate(results, 1):
+        vl = result.get('Наименование ВЛ', '-')
+        supports = result.get('Опоры', '-')
+        supports_count = result.get('Количество опор', '-')
+        provider = result.get('Наименование Провайдера', '-')
         
-        # ВАЖНО: Показываем ВСЕ записи для этой ВЛ
-        if len(vl_results) > 1:
-            # Если несколько записей - нумеруем их
-            for i, result in enumerate(vl_results, 1):
-                supports = result.get('Опоры', '-')
-                supports_count = result.get('Количество опор', '-')
-                provider = result.get('Наименование Провайдера', '-')
-                message += f"  {i}. Опоры: {supports}, Кол-во: {supports_count}\n"
-                message += f"     Контрагент: {provider}\n"
-        else:
-            # Если одна запись - показываем без нумерации
-            result = vl_results[0]
-            supports = result.get('Опоры', '-')
-            supports_count = result.get('Количество опор', '-')
-            provider = result.get('Наименование Провайдера', '-')
-            message += f"Опоры: {supports}, Количество опор: {supports_count}\n"
-            message += f"Контрагент: {provider}\n"
-        
-        message += "\n"
+        message += f"{i}. ⚡ **ВЛ: {vl}**\n"
+        message += f"   Опоры: {supports}, Кол-во: {supports_count}\n"
+        message += f"   Контрагент: {provider}\n\n"
     
     # Разбиваем на части если сообщение слишком длинное
     if len(message) > 4000:
         # Первое сообщение с заголовком
-        header = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n"
-        header += f"🔌 Уникальных ВЛ: {len(vl_groups)}\n\n"
+        header = f"📍 {res_name} РЭС, на {tp_name} найдено {len(results)} ВОЛС с договором аренды.\n\n"
         
         parts = []
         current_part = ""
         
-        for vl, vl_results in sorted(vl_groups.items()):
-            vl_text = f"⚡ **ВЛ: {vl}**\n"
+        for i, result in enumerate(results, 1):
+            vl = result.get('Наименование ВЛ', '-')
+            supports = result.get('Опоры', '-')
+            supports_count = result.get('Количество опор', '-')
+            provider = result.get('Наименование Провайдера', '-')
             
-            if len(vl_results) > 1:
-                for i, result in enumerate(vl_results, 1):
-                    vl_text += f"  {i}. Опоры: {result.get('Опоры', '-')}, Кол-во: {result.get('Количество опор', '-')}\n"
-                    vl_text += f"     Контрагент: {result.get('Наименование Провайдера', '-')}\n"
-            else:
-                result = vl_results[0]
-                vl_text += f"Опоры: {result.get('Опоры', '-')}, Количество опор: {result.get('Количество опор', '-')}\n"
-                vl_text += f"Контрагент: {result.get('Наименование Провайдера', '-')}\n"
-            
-            vl_text += "\n"
+            record_text = f"{i}. ⚡ **ВЛ: {vl}**\n"
+            record_text += f"   Опоры: {supports}, Кол-во: {supports_count}\n"
+            record_text += f"   Контрагент: {provider}\n\n"
             
             # Проверяем, поместится ли в текущую часть
-            if len(current_part + vl_text) > 3500:
+            if len(current_part + record_text) > 3500:
                 parts.append(current_part)
-                current_part = vl_text
+                current_part = record_text
             else:
-                current_part += vl_text
+                current_part += record_text
         
         if current_part:
             parts.append(current_part)
@@ -1938,7 +2017,6 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str, sea
     else:
         await update.message.reply_text(message, parse_mode='Markdown')
     
-    # Используем сохраненный поисковый запрос для кнопки
     # Проверяем, откуда пришли - из двойного поиска или обычного
     if 'dual_search_results' in user_states[user_id]:
         # Пришли из двойного поиска - показываем специальную клавиатуру
@@ -1954,11 +2032,7 @@ async def show_tp_results(update: Update, results: List[Dict], tp_name: str, sea
         )
         #ЧАСТЬ 5.2 КОНЕЦ= ОБРАБОТЧИК СООБЩЕНИЙ ================================================================================================
 
-# ===ЧАСТЬ 5.3=== ОБРАБОТЧИК СООБЩЕНИЙ ========================================================================================================
 
-# ===ЧАСТЬ 5.3=== ОБРАБОТЧИК СООБЩЕНИЙ ========================================================================================================
-
-# ===ЧАСТЬ 5.3=== ОБРАБОТЧИК СООБЩЕНИЙ ========================================================================================================
 
 # ===ЧАСТЬ 5.3=== ОБРАБОТЧИК СООБЩЕНИЙ ========================================================================================================
 
@@ -2321,9 +2395,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         
                         logger.info(f"[handle_message] Уникальных ВЛ найдено: {len(vl_list)}")
                         logger.info(f"[handle_message] ВЛ: {vl_list}")
+                        user_states[user_id]['from_dual_search'] = True
                         
                         # Используем функцию для создания клавиатуры
-                        reply_markup = get_vl_selection_keyboard(vl_list, full_tp_name)
+                        reply_markup = get_vl_selection_keyboard(vl_list, full_tp_name, from_dual_search=True)
                         
                         await update.message.reply_text(
                             f"📨 Отправка уведомления по ТП: {full_tp_name}\n"
@@ -2527,7 +2602,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             logger.info(f"[handle_message] При возврате назад найдено {len(vl_list)} ВЛ")
                             
                             # Используем функцию для создания клавиатуры
-                            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+                            from_dual_search = user_states[user_id].get('from_dual_search', False) 
+                            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp, from_dual_search)
                             
                             await update.message.reply_text(
                                 f"📨 Отправка уведомления по ТП: {selected_tp}\n"
@@ -2612,7 +2688,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             vl_list = list(set([r['Наименование ВЛ'] for r in results]))
                             vl_list.sort()
                             
-                            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp)
+                            from_dual_search = user_states[user_id].get('from_dual_search', False) 
+                            reply_markup = get_vl_selection_keyboard(vl_list, selected_tp, from_dual_search)
                             
                             await update.message.reply_text(
                                 f"📨 Отправка уведомления по ТП: {selected_tp}\n"
@@ -2732,22 +2809,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if csv_url:
                 data = load_csv_from_url(csv_url)
-                # Точный поиск по полному названию ТП
+                
+                # ИЗМЕНЕНО: Ищем как по точному совпадению, так и по очищенному названию
+                tp_results = []
+                
+                # Сначала пробуем точное совпадение
                 tp_results = [r for r in data if r.get('Наименование ТП', '') == text]
+                
+                # Если не нашли - ищем без учета префиксов
+                if not tp_results:
+                    # Убираем префикс из выбранного текста
+                    text_clean = re.sub(r'^\d+\)\s*', '', text)
+                    
+                    for row in data:
+                        tp_name = row.get('Наименование ТП', '')
+                        tp_name_clean = re.sub(r'^\d+\)\s*', '', tp_name)
+                        
+                        # Сравниваем очищенные версии
+                        if tp_name_clean == text_clean or tp_name == text:
+                            tp_results.append(row)
                 
                 # Фильтруем по РЭС если нужно
                 user_permissions = get_user_permissions(user_id)
                 user_res = user_permissions.get('res')
                 if user_res and user_res != 'All':
+                    # ИСПРАВЛЕНО: Фильтруем tp_results, а не results!
                     tp_results = [r for r in tp_results if r.get('РЭС', '').strip() == user_res]
                 
                 logger.info(f"[select_notification_tp] Точный поиск для '{text}' нашел {len(tp_results)} записей")
+                
+                # ДОБАВЛЕНО: Логирование для отладки
+                if tp_results:
+                    vl_names = [r.get('Наименование ВЛ', '') for r in tp_results]
+                    unique_vl = list(set(vl_names))
+                    logger.info(f"[select_notification_tp] Всего записей: {len(tp_results)}, уникальных ВЛ: {len(unique_vl)}")
+                    logger.info(f"[select_notification_tp] Примеры ВЛ: {unique_vl[:5]}")
+                    
             else:
                 # Если не удалось загрузить - используем исходные результаты
                 tp_results = [r for r in results if r['Наименование ТП'] == text]
             
             if tp_results:
-                user_states[user_id]['selected_tp'] = text
+                # Сохраняем оригинальное название ТП (с префиксом если есть)
+                original_tp_name = tp_results[0].get('Наименование ТП', text)
+                
+                user_states[user_id]['selected_tp'] = original_tp_name
                 user_states[user_id]['tp_data'] = tp_results[0]
                 user_states[user_id]['action'] = 'select_vl'
                 
@@ -2756,13 +2862,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 vl_list.sort()
                 
                 logger.info(f"[select_notification_tp] Найдено {len(vl_list)} уникальных ВЛ")
+                logger.info(f"[select_notification_tp] ВЛ: {vl_list[:10]}...")  # Показываем первые 10 для отладки
                 
                 # Используем функцию для создания клавиатуры
-                reply_markup = get_vl_selection_keyboard(vl_list, text)
+                reply_markup = get_vl_selection_keyboard(vl_list, original_tp_name)
                 
                 await update.message.reply_text(
-                    f"📨 Отправка уведомления по ТП: {text}\n"
-                    f"📊 Найдено ВЛ: {len(vl_list)}\n\n"
+                    f"📨 Отправка уведомления по ТП: {original_tp_name}\n"
+                    f"📊 Найдено записей: {len(tp_results)}\n"
+                    f"⚡ Уникальных ВЛ: {len(vl_list)}\n\n"
                     f"Выберите ВЛ:",
                     reply_markup=reply_markup
                 )
@@ -2778,6 +2886,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "🔍 Введите наименование ТП для поиска:",
                     reply_markup=get_search_keyboard()
                 )
+            elif text == '⬅️ Вернуться к результатам поиска':
+                dual_results = user_states[user_id].get('dual_search_results', {})
+                if dual_results:
+                    registry_tp_names = dual_results['registry_tp_names']
+                    structure_tp_names = dual_results['structure_tp_names']
+                    search_query = user_states[user_id].get('last_search_query', '')
+                    
+                    # Возвращаемся в состояние поиска
+                    user_states[user_id]['state'] = 'search_tp'
+                    user_states[user_id]['action'] = 'dual_search'
+                    
+                    message = f"🔍 Результаты поиска по запросу: **{search_query}**\n\n"
+                    
+                    if registry_tp_names:
+                        message += f"📋 **Реестр договоров** (найдено {len(dual_results['registry'])} записей)\n"
+                        message += f"   ТП: {len(registry_tp_names)} шт.\n\n"
+                    
+                    if structure_tp_names:
+                        message += f"🗂️ **Структура сети** (найдено {len(dual_results['structure'])} записей)\n"
+                        message += f"   ТП: {len(structure_tp_names)} шт.\n\n"
+                    
+                    message += "📌 Выберите ТП:\n"
+                    message += "• Слева (📄) - просмотр договоров\n"
+                    message += "• Справа (📍) - отправка уведомления"
+                    
+                    await update.message.reply_text(
+                        message,
+                        reply_markup=get_dual_search_keyboard(registry_tp_names, structure_tp_names),
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await update.message.reply_text("❌ Результаты поиска не найдены")
             else:
                 # Выбрана конкретная ВЛ
                 selected_tp = user_states[user_id].get('selected_tp')
